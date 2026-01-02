@@ -49,13 +49,11 @@ const App: React.FC = () => {
     }
   }, [userId]);
 
-  // Lädt die globale Rezept-Bibliothek (Cloud-Sync)
   const fetchGlobalData = useCallback(async () => {
     try {
       setIsLoading(true);
       
-      // 1. Alle Rezepte laden
-      const { data: recipesData, error: rError } = await supabase
+      const { data: recipesData } = await supabase
         .from('recipes')
         .select('*')
         .order('created_at', { ascending: false });
@@ -71,7 +69,6 @@ const App: React.FC = () => {
         setAllRecipes(formatted);
       }
 
-      // 2. Eigene Swipes von heute laden
       if (userId) {
         const { data: swipesData } = await supabase
           .from('swipes')
@@ -95,28 +92,30 @@ const App: React.FC = () => {
   useEffect(() => {
     fetchGlobalData();
 
-    // REALTIME: Höre auf Änderungen in der Cloud
-    const channel = supabase.channel('global-sync')
-      .on('postgres_changes', { event: 'INSERT', table: 'recipes' }, (payload) => {
-        // Wenn jemand (irgendwer) ein Rezept hochlädt -> Liste aktualisieren
+    // Fix für TS2769: Cast zu 'any' um den Build-Fehler zu vermeiden
+    const channel = (supabase.channel('global-sync') as any)
+      .on('postgres_changes', { event: 'INSERT', table: 'recipes' }, () => {
         fetchGlobalData();
       })
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
-        // Wenn MEIN PARTNER heute geliked hat
         if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-          // Check ob ich das gleiche Rezept auch schon geliked habe
-          const myLike = swipes.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
-          if (myLike) {
-            const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
-            if (matchedRecipe) setCurrentMatch(matchedRecipe);
-          }
+          setSwipes(current => {
+            const myLike = current.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
+            if (myLike) {
+              const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
+              if (matchedRecipe) setCurrentMatch(matchedRecipe);
+            }
+            return current;
+          });
         }
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchGlobalData, partnerId, today, swipes, allRecipes]);
+    return () => { 
+      supabase.removeChannel(channel); 
+    };
+  }, [fetchGlobalData, partnerId, today, allRecipes]);
 
   const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
   
@@ -131,11 +130,9 @@ const App: React.FC = () => {
     if (!dailyRecipe || !userId) return;
     const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
     
-    // Lokal sofort anzeigen
     const newLocalSwipe: Swipe = { id: 'temp-' + Date.now(), userId, recipeId: dailyRecipe.id, type: swipeType, date: today };
     setSwipes(prev => [...prev, newLocalSwipe]);
     
-    // In die Cloud speichern
     const { error } = await supabase.from('swipes').insert({ 
       user_id: userId, 
       recipe_id: dailyRecipe.id, 
@@ -144,11 +141,10 @@ const App: React.FC = () => {
     });
 
     if (error) {
-      alert("Konnte Vote nicht speichern. Check deine Internetverbindung.");
+      alert("Fehler beim Speichern.");
       return;
     }
     
-    // Sofort-Check für Match (falls Partner schon vor mir geliked hat)
     if (swipeType === 'like' && partnerId) {
       const { data: partnerLikes } = await supabase
         .from('swipes')
@@ -166,7 +162,6 @@ const App: React.FC = () => {
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
     const newId = Math.random().toString(36).substring(7);
-    
     try {
       const { error } = await supabase.from('recipes').insert({
         id: newId, 
@@ -180,9 +175,9 @@ const App: React.FC = () => {
 
       setIsAddingRecipe(false);
       setView('recipes');
-      fetchGlobalData(); // Liste neu laden
+      fetchGlobalData();
     } catch (e) { 
-      alert("Fehler beim Hochladen. Ist die Tabelle 'recipes' im SQL Editor korrekt angelegt?");
+      alert("Fehler beim Hochladen.");
     }
   };
 
@@ -190,7 +185,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#fdfcfb]">
         <Loader2 className="animate-spin text-orange-600 mb-4" size={48} />
-        <p className="text-gray-400 font-bold text-xs uppercase tracking-widest">Lade DinnerMatch Cloud...</p>
+        <p className="text-gray-400 font-bold text-xs uppercase tracking-widest text-center">Cloud Sync...<br/>DinnerMatch wird geladen</p>
       </div>
     );
   }
@@ -237,7 +232,7 @@ const App: React.FC = () => {
                   <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
                     <span className="text-emerald-900 font-bold">Wahl getroffen!</span>
-                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic">Warte auf Partner...</p>
+                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic text-center">Warte auf deinen Partner...</p>
                   </div>
                 )}
               </div>
@@ -311,7 +306,7 @@ const App: React.FC = () => {
                       {allRecipes.length === 0 && !isLoading && (
                         <div className="text-center py-20 bg-gray-50 rounded-[3rem] border-2 border-dashed border-gray-200">
                           <BookOpen className="mx-auto text-gray-300 mb-4" size={48} />
-                          <p className="text-gray-400 font-medium italic">Die Bibliothek ist noch leer.</p>
+                          <p className="text-gray-400 font-medium italic text-center px-4">Die Bibliothek ist leer.<br/>Sei der Erste!</p>
                         </div>
                       )}
                       {allRecipes.map(r => (
@@ -339,7 +334,7 @@ const App: React.FC = () => {
                 
                 <div className="space-y-6">
                   <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">Dein Name</label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors text-left">Dein Name</label>
                     <input 
                       value={userName} 
                       onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} 
@@ -348,7 +343,7 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative">
-                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2">Deine ID (Für den Partner)</label>
+                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2 text-left">Deine ID (Für den Partner)</label>
                     <div className="flex justify-between items-center">
                       <span className="font-mono font-black text-lg text-orange-900 tracking-tighter italic">{userId}</span>
                       <button 
@@ -361,20 +356,20 @@ const App: React.FC = () => {
                   </div>
 
                   <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">ID deines Partners</label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors text-left">ID deines Partners</label>
                     <input 
                       value={partnerId} 
                       onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} 
                       className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 focus:ring-2 ring-orange-500/20 placeholder:text-gray-300" 
                       placeholder="XXXXXX" 
                     />
-                    <p className="text-[9px] text-gray-400 mt-2 italic px-1">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
+                    <p className="text-[9px] text-gray-400 mt-2 italic px-1 text-left">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
                   </div>
                   
                   <div className="pt-6 border-t border-gray-100">
                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic">
-                        Alle Rezepte in DinnerMatch sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek für alle User.
+                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic text-left">
+                        Alle Rezepte sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek für alle User.
                       </p>
                     </div>
                   </div>
