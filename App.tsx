@@ -104,7 +104,6 @@ const App: React.FC = () => {
         .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
           const newSwipe = payload.new;
           if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-            // Check if user already liked this
             setSwipes(current => {
               const hasLiked = current.some(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
               if (hasLiked) {
@@ -147,7 +146,6 @@ const App: React.FC = () => {
         await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type: swipeType, day: today });
       } catch (e) { console.warn("Swipe nur lokal gespeichert."); }
     } else {
-      // Mock Match Logik für lokalen Modus (wenn PartnerID = eigene ID zum Testen)
       if (swipeType === 'like' && partnerId === userId) {
         setCurrentMatch(dailyRecipe);
       }
@@ -174,24 +172,64 @@ const App: React.FC = () => {
     }
   };
 
+  // ROBUSTER EXPORT (Unterstützt Sonderzeichen)
   const exportRecipes = () => {
-    const code = btoa(JSON.stringify(allRecipes));
-    setSyncCode(code);
-    navigator.clipboard.writeText(code);
-    alert("Sync-Code kopiert! Schicke ihn deinem Partner.");
+    if (allRecipes.length === 0) {
+      alert("Deine Bibliothek ist leer.");
+      return;
+    }
+    
+    try {
+      const jsonString = JSON.stringify(allRecipes);
+      const utf8Bytes = new TextEncoder().encode(jsonString);
+      let binary = "";
+      for (let i = 0; i < utf8Bytes.byteLength; i++) {
+        binary += String.fromCharCode(utf8Bytes[i]);
+      }
+      const b64 = btoa(binary);
+      setSyncCode(b64);
+      navigator.clipboard.writeText(b64).then(() => {
+        alert("Sync-Code für " + allRecipes.length + " Rezepte kopiert!");
+      }).catch(() => {
+        alert("Kopieren fehlgeschlagen. Bitte markiere den Text im Feld manuell.");
+      });
+    } catch (e) {
+      console.error(e);
+      alert("Fehler beim Erstellen des Codes. Eventuell sind die Bilder zu groß.");
+    }
   };
 
+  // ROBUSTER IMPORT
   const importRecipes = () => {
+    if (!syncCode.trim()) return;
+    
     try {
-      const decoded = JSON.parse(atob(syncCode));
+      const binary = atob(syncCode);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const decodedString = new TextDecoder().decode(bytes);
+      const decoded = JSON.parse(decodedString);
+      
       if (Array.isArray(decoded)) {
-        setAllRecipes(decoded);
-        localStorage.setItem('dm_local_recipes', JSON.stringify(decoded));
-        alert(`${decoded.length} Rezepte importiert!`);
+        // IDs bereinigen um Duplikate zu vermeiden
+        const cleaned = decoded.map(r => ({
+          ...r,
+          id: r.id || Math.random().toString(36).substring(7)
+        }));
+        
+        setAllRecipes(cleaned);
+        localStorage.setItem('dm_local_recipes', JSON.stringify(cleaned));
+        alert(`${cleaned.length} Rezepte erfolgreich importiert!`);
         setSyncCode('');
+        setView('recipes');
+      } else {
+        throw new Error("Kein Array");
       }
     } catch (e) {
-      alert("Ungültiger Sync-Code!");
+      console.error(e);
+      alert("Ungültiger oder beschädigter Sync-Code!");
     }
   };
 
@@ -362,11 +400,14 @@ const App: React.FC = () => {
                   <hr className="border-gray-100" />
 
                   <div className="space-y-4">
-                    <h3 className="font-bold text-gray-900 text-sm">Rezepte übertragen</h3>
-                    <p className="text-xs text-gray-400 italic">Falls der Cloud-Sync nicht aktiv ist, könnt ihr eure Rezepte manuell teilen.</p>
+                    <div className="flex items-center gap-2">
+                      <Share2 size={16} className="text-gray-400" />
+                      <h3 className="font-bold text-gray-900 text-sm">Rezepte übertragen</h3>
+                    </div>
+                    <p className="text-xs text-gray-400 italic">Nutze diesen Code, um deine Bibliothek auf das Handy deines Partners zu kopieren.</p>
                     
-                    <button onClick={exportRecipes} className="w-full flex items-center justify-center gap-2 bg-gray-900 text-white py-4 rounded-2xl font-bold text-sm hover:bg-gray-800 transition-colors">
-                      <Share2 size={18} /> Bibliothek exportieren
+                    <button onClick={exportRecipes} className="w-full flex items-center justify-center gap-2 bg-gray-900 text-white py-4 rounded-2xl font-bold text-sm hover:bg-gray-800 transition-colors shadow-lg">
+                      Bibliothek in Code umwandeln
                     </button>
 
                     <div className="space-y-2">
@@ -374,9 +415,9 @@ const App: React.FC = () => {
                         value={syncCode} 
                         onChange={e => setSyncCode(e.target.value)}
                         placeholder="Sync-Code hier einfügen..."
-                        className="w-full bg-gray-50 p-4 rounded-2xl text-[10px] h-20 font-mono resize-none"
+                        className="w-full bg-gray-50 p-4 rounded-2xl text-[10px] h-24 font-mono resize-none focus:ring-2 ring-orange-500/20"
                       />
-                      <button onClick={importRecipes} className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-4 rounded-2xl font-bold text-sm hover:bg-orange-700 transition-colors">
+                      <button onClick={importRecipes} className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-4 rounded-2xl font-bold text-sm hover:bg-orange-700 transition-colors shadow-lg">
                         <Download size={18} /> Code importieren
                       </button>
                     </div>
