@@ -2,15 +2,10 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = 'https://ftgehvosyndexykrclrc.supabase.co';
-// Hinweis: Dieser Key muss mit 'eyJ' beginnen, um zu funktionieren.
-const supabaseAnonKey = 'sb_publishable_LBrWyOdQTgjSixQ6bEDGfg_T8kt8Ria';
 
-export const isSupabaseConnected = supabaseAnonKey && supabaseAnonKey.startsWith('eyJ');
+// Dein bereitgestellter Anon Key
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ0Z2Vodm9zeW5kZXh5a3JjbHJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjczNTc1NzIsImV4cCI6MjA4MjkzMzU3Mn0.K_R7HydwHuX6DDr8zpM_0BLrMheyfroxyH4aZwc3Q-4';
 
-if (!isSupabaseConnected) {
-  console.warn("DinnerMatch: Kein gültiger Supabase Anon Key. Nutze lokalen Modus & Sync-Codes.");
-}
+export const isSupabaseConnected = true;
 
-const finalKey = isSupabaseConnected ? supabaseAnonKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.placeholder';
-
-export const supabase = createClient(supabaseUrl, finalKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
