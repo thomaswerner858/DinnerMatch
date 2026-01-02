@@ -1,17 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const getApiKey = () => {
-  try {
-    if (typeof process !== 'undefined' && process.env) {
-      return process.env.API_KEY || "";
-    }
-  } catch (e) {
-    console.error("Fehler beim Zugriff auf API_KEY:", e);
-  }
-  return "";
-};
-
 const SYSTEM_INSTRUCTION = `
 Du bist ein leitender Full-Stack-Entwickler und Product Owner. Dein Ziel ist es, eine Web-App namens "DinnerMatch" zu entwerfen.
 
@@ -25,11 +14,9 @@ Deine Aufgabe: Generiere kreative Rezeptvorschläge, die genau in dieses Schema 
 `;
 
 export async function generateRecipeSuggestion(lastMatches: string[]) {
-  const apiKey = getApiKey();
-  if (!apiKey) return null;
-
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    // Fix: Use process.env.API_KEY directly for initialization as per guidelines
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const prompt = `Basierend auf diesen letzten Gerichten: ${lastMatches.join(", ") || "Keine vorhanden"}, schlage ein neues, kreatives Rezept für ein Abendessen vor. Gib den Namen, eine kurze Beschreibung, 5 Hauptzutaten und einen Bild-Prompt aus. Antworte auf Deutsch.`;
 
     const response = await ai.models.generateContent({
@@ -54,6 +41,7 @@ export async function generateRecipeSuggestion(lastMatches: string[]) {
       }
     });
 
+    // Fix: Access .text property directly instead of calling a method or complex nesting
     const text = response.text;
     return text ? JSON.parse(text) : null;
   } catch (error) {

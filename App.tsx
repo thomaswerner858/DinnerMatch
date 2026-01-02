@@ -2,7 +2,6 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Recipe, Swipe, Match, SwipeType } from './types';
 import { supabase, isSupabaseConnected } from './lib/supabase';
-import { INITIAL_RECIPES } from './lib/mockData';
 import SwipeCard from './components/SwipeCard';
 import RecipeForm from './components/RecipeForm';
 import MatchCelebration from './components/MatchCelebration';
@@ -12,7 +11,6 @@ import {
   ChefHat, 
   CheckCircle2,
   UtensilsCrossed,
-  Heart,
   Plus,
   Loader2,
   User as UserIcon,
@@ -23,7 +21,11 @@ import {
   AlertCircle,
   RefreshCw,
   Globe,
-  Users
+  Users,
+  X,
+  ChevronRight,
+  // Fix: Add Heart to imports
+  Heart
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -32,8 +34,9 @@ const App: React.FC = () => {
   const [userName, setUserName] = useState<string>(() => localStorage.getItem('dm_user_name') || 'Ich');
   
   const [allRecipes, setAllRecipes] = useState<Recipe[]>([]);
-  const [swipes, setSwipes] = useState<Swipe[]>([]);
+  const [allSwipesToday, setAllSwipesToday] = useState<any[]>([]);
   const [currentMatch, setCurrentMatch] = useState<Recipe | null>(null);
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
   const [view, setView] = useState<'home' | 'swipe' | 'recipes' | 'profile'>('home');
   const [isAddingRecipe, setIsAddingRecipe] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -47,7 +50,6 @@ const App: React.FC = () => {
     recipesRef.current = allRecipes;
   }, [allRecipes]);
 
-  // Initialisierung der User ID (Kurz-ID für einfaches Pairing)
   useEffect(() => {
     if (!userId) {
       const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -81,28 +83,18 @@ const App: React.FC = () => {
         setAllRecipes(formatted);
       }
 
-      // WICHTIG: Hier tritt der UUID Fehler auf, wenn die DB Spalte falsch ist
       const { data: swipesData, error: swipesError } = await supabase
         .from('swipes')
         .select('*')
-        .eq('day', today)
-        .eq('user_id', userId);
+        .eq('day', today);
           
       if (swipesError) throw swipesError;
+      setAllSwipesToday(swipesData || []);
 
-      if (swipesData) {
-        setSwipes(swipesData.map(s => ({
-          id: s.id.toString(), 
-          userId: s.user_id, 
-          recipeId: s.recipe_id, 
-          type: s.type as SwipeType, 
-          date: s.day
-        })));
-      }
     } catch (err: any) {
       console.error("Sync Error:", err.message);
       if (err.message.includes('uuid')) {
-        setDbError("Datenbank-Fehler: Die Tabelle erwartet eine UUID, erhält aber eine Kurz-ID. Bitte führe das SQL-Skript zur Bereinigung in Supabase aus.");
+        setDbError("Datenbank-Strukturfehler. Bitte SQL-Skript erneut ausführen.");
       }
     } finally {
       setIsLoading(false);
@@ -122,68 +114,73 @@ const App: React.FC = () => {
       })
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
-        // Wenn Partner liked und es für heute ist
-        if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-          setSwipes(currentSwipes => {
-            const myLike = currentSwipes.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
+        if (newSwipe.day === today) {
+          setAllSwipesToday(prev => [...prev, newSwipe]);
+          
+          // Match-Check für Echtzeit-PopUp
+          if (newSwipe.user_id === partnerId && newSwipe.type === 'like') {
+            const mySwipes = allSwipesToday.filter(s => s.user_id === userId);
+            const myLike = mySwipes.find(s => s.recipe_id === newSwipe.recipe_id && s.type === 'like');
             if (myLike) {
               const matchedRecipe = recipesRef.current.find(r => r.id === newSwipe.recipe_id);
               if (matchedRecipe) setCurrentMatch(matchedRecipe);
             }
-            return currentSwipes;
-          });
+          }
         }
       })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [partnerId, today, fetchGlobalData, userId]);
+  }, [partnerId, today, fetchGlobalData, userId, allSwipesToday]);
 
-  const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
-  
-  const dailyRecipe = useMemo(() => {
-    if (allRecipes.length === 0) return null;
-    const daySeed = new Date().getFullYear() * 1000 + new Date().getMonth() * 100 + new Date().getDate();
-    const dayIndex = daySeed % allRecipes.length;
-    return allRecipes[dayIndex];
-  }, [allRecipes]);
+  // Berechnung der heutigen Matches
+  const matchesToday = useMemo(() => {
+    if (!partnerId) return [];
+    const myLikes = allSwipesToday.filter(s => s.user_id === userId && s.type === 'like').map(s => s.recipe_id);
+    const partnerLikes = allSwipesToday.filter(s => s.user_id === partnerId && s.type === 'like').map(s => s.recipe_id);
+    
+    const commonIds = myLikes.filter(id => partnerLikes.includes(id));
+    return allRecipes.filter(r => commonIds.includes(r.id));
+  }, [allSwipesToday, userId, partnerId, allRecipes]);
+
+  // Liste der Rezepte, die ich heute noch nicht geswiped habe
+  const swipableRecipes = useMemo(() => {
+    const swipedIds = allSwipesToday.filter(s => s.user_id === userId).map(s => s.recipe_id);
+    return allRecipes.filter(r => !swipedIds.includes(r.id));
+  }, [allRecipes, allSwipesToday, userId]);
+
+  const currentSwipeRecipe = swipableRecipes[0] || null;
 
   const handleSwipe = useCallback(async (direction: 'left' | 'right') => {
-    if (!dailyRecipe || !userId) return;
+    if (!currentSwipeRecipe || !userId) return;
     const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
-    
-    // Optimistisches Update
-    const newLocalSwipe: Swipe = { id: 'temp-' + Date.now(), userId, recipeId: dailyRecipe.id, type: swipeType, date: today };
-    setSwipes(prev => [...prev, newLocalSwipe]);
     
     const { error } = await supabase.from('swipes').insert({ 
       user_id: userId, 
-      recipe_id: dailyRecipe.id, 
+      recipe_id: currentSwipeRecipe.id, 
       type: swipeType, 
       day: today 
     });
 
     if (error) {
-      alert("Fehler beim Speichern: " + error.message);
-      fetchGlobalData(true); // Rollback
+      alert("Fehler: " + error.message);
       return;
     }
     
-    // Prüfe auf sofortiges Match
+    // Lokaler Match Check
     if (swipeType === 'like' && partnerId) {
-      const { data: partnerLikes } = await supabase
-        .from('swipes')
-        .select('*')
-        .eq('user_id', partnerId)
-        .eq('recipe_id', dailyRecipe.id)
-        .eq('type', 'like')
-        .eq('day', today);
-        
-      if (partnerLikes && partnerLikes.length > 0) {
-        setCurrentMatch(dailyRecipe);
+      const partnerLiked = allSwipesToday.some(s => 
+        s.user_id === partnerId && 
+        s.recipe_id === currentSwipeRecipe.id && 
+        s.type === 'like'
+      );
+      if (partnerLiked) {
+        setCurrentMatch(currentSwipeRecipe);
       }
     }
-  }, [userId, dailyRecipe, today, partnerId, fetchGlobalData]);
+    
+    fetchGlobalData(true);
+  }, [userId, currentSwipeRecipe, today, partnerId, allSwipesToday, fetchGlobalData]);
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
     const newId = Math.random().toString(36).substring(2) + Date.now().toString(36);
@@ -195,39 +192,26 @@ const App: React.FC = () => {
         image_url: recipeData.imageUrl, 
         created_by: userId
       });
-
       if (error) throw error;
-
       setIsAddingRecipe(false);
       setView('recipes');
       fetchGlobalData(true);
     } catch (e: any) { 
-      alert("Fehler beim Hochladen: " + e.message);
+      alert("Fehler: " + e.message);
     }
   };
-
-  if (isLoading && allRecipes.length === 0) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#fdfcfb]">
-        <Loader2 className="animate-spin text-orange-600 mb-4" size={48} />
-        <p className="text-gray-400 font-bold text-xs uppercase tracking-widest text-center px-6 leading-loose">
-          Synchronisation...<br/>DinnerMatch wird vorbereitet
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen max-w-md mx-auto bg-[#fdfcfb] flex flex-col relative overflow-hidden shadow-2xl border-x border-gray-100 text-left">
       <header className="px-6 py-6 flex justify-between items-center bg-white/70 backdrop-blur-xl sticky top-0 z-30 border-b border-gray-50">
         <div onClick={() => setView('home')} className="cursor-pointer">
-          <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
+          <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-1">
             DinnerMatch <UtensilsCrossed className="text-orange-500" size={24} />
           </h1>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest flex items-center gap-1">
-              <Globe size={10} /> Cloud Sync Aktiv
+              <Globe size={10} /> Live Cloud
             </p>
           </div>
         </div>
@@ -237,65 +221,77 @@ const App: React.FC = () => {
       </header>
 
       {dbError && (
-        <div className="mx-6 mt-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3 text-rose-800 text-xs">
-          <AlertCircle className="flex-shrink-0 mt-0.5" size={16} />
-          <p className="leading-relaxed font-medium">{dbError}</p>
+        <div className="mx-6 mt-2 p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-center gap-2 text-rose-800 text-[10px]">
+          <AlertCircle size={14} /> <p className="font-bold uppercase tracking-wider">{dbError}</p>
         </div>
       )}
 
       <main className="flex-grow px-6 pb-28 overflow-y-auto">
         <AnimatePresence mode="wait">
           {view === 'home' && (
-            <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pt-4">
-              <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-orange-100/50 border border-orange-50 relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-6"><ChefHat className="text-orange-200" size={40} /></div>
+            <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 pt-4">
+              {/* Swipe Status Card */}
+              <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-orange-100/30 border border-orange-50 relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-6 opacity-10 rotate-12"><ChefHat size={80} /></div>
                 <h2 className="text-xl font-bold text-gray-900 mb-2">Heute entscheiden</h2>
-                <p className="text-gray-500 text-sm mb-8 leading-relaxed italic">Ein Rezept, eine Wahl. Seid ihr euch einig?</p>
-                {!hasSwipedToday ? (
-                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:bg-orange-700 transition-all active:scale-95">Vorschlag ansehen</button>
+                <p className="text-gray-500 text-xs mb-8 leading-relaxed italic">Noch {swipableRecipes.length} Rezepte offen</p>
+                {swipableRecipes.length > 0 ? (
+                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:bg-orange-700 transition-all active:scale-95 flex items-center justify-center gap-2">
+                    Jetzt Voten <ChevronRight size={18} />
+                  </button>
                 ) : (
-                  <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
+                  <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100 text-center">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
-                    <span className="text-emerald-900 font-bold">Wahl getroffen!</span>
-                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic text-center px-4">Warte auf deinen Partner...</p>
+                    <span className="text-emerald-900 font-bold">Alles bewertet!</span>
+                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic">Komm morgen wieder für neue Ideen</p>
                   </div>
                 )}
               </div>
+
+              {/* Matches Section */}
               <div className="space-y-4">
-                <div className="flex justify-between items-center px-1">
-                  <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2"><Users size={18} className="text-orange-500" /> Community-Status</h3>
-                  <button onClick={() => fetchGlobalData()} className="text-gray-400 p-2 hover:text-orange-500 transition-colors"><RefreshCw size={18} /></button>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm text-center">
-                    <p className="text-3xl font-black text-orange-600 leading-none">{allRecipes.length}</p>
-                    <p className="text-[10px] text-gray-400 uppercase font-bold mt-2 tracking-tighter">Rezepte Gesamt</p>
+                <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2 px-1">
+                  <Heart size={18} className="text-rose-500 fill-rose-500" /> Eure Matches heute
+                </h3>
+                {matchesToday.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    {matchesToday.map(match => (
+                      <motion.div 
+                        key={match.id} 
+                        layoutId={match.id}
+                        onClick={() => setSelectedRecipe(match)}
+                        className="bg-white p-3 rounded-3xl border border-gray-100 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+                      >
+                        <div className="aspect-square rounded-2xl overflow-hidden mb-3">
+                          <img src={match.imageUrl} className="w-full h-full object-cover" alt={match.title} />
+                        </div>
+                        <h4 className="font-bold text-gray-900 text-sm truncate px-1">{match.title}</h4>
+                      </motion.div>
+                    ))}
                   </div>
-                  <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm text-center">
-                    <p className="text-3xl font-black text-emerald-500 leading-none">Live</p>
-                    <p className="text-[10px] text-gray-400 uppercase font-bold mt-2 tracking-tighter">Cloud Status</p>
+                ) : (
+                  <div className="bg-gray-50 p-8 rounded-[2.5rem] border-2 border-dashed border-gray-200 text-center">
+                    <p className="text-gray-400 text-xs font-medium italic">Noch keine Matches.<br/>Swiped beide auf 'Lecker'!</p>
                   </div>
-                </div>
+                )}
               </div>
             </motion.div>
           )}
 
           {view === 'swipe' && (
             <motion.div key="swipe" className="h-[65vh] relative mt-4">
-              {hasSwipedToday ? (
-                <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
-                  <div className="bg-orange-100 p-6 rounded-full text-orange-600 shadow-inner"><CheckCircle2 size={48} /></div>
-                  <h2 className="text-2xl font-bold italic">Bis morgen!</h2>
-                  <p className="text-gray-500 max-w-[200px] mx-auto">Ihr beide bekommt jeden Tag das gleiche Rezept zum Voten.</p>
-                  <button onClick={() => setView('home')} className="mt-4 bg-gray-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg">Zum Dashboard</button>
-                </div>
-              ) : dailyRecipe ? (
-                <SwipeCard recipe={dailyRecipe} onSwipe={handleSwipe} isTop={true} />
+              {currentSwipeRecipe ? (
+                <SwipeCard 
+                  key={currentSwipeRecipe.id}
+                  recipe={currentSwipeRecipe} 
+                  onSwipe={handleSwipe} 
+                  isTop={true} 
+                />
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-center space-y-6">
                   <BookOpen className="text-gray-200" size={80} />
-                  <p className="text-gray-500 font-medium italic">Noch keine Rezepte in der Cloud.</p>
-                  <button onClick={() => setView('recipes')} className="bg-orange-600 text-white px-6 py-3 rounded-xl font-bold shadow-lg">Erstes Rezept hinzufügen</button>
+                  <p className="text-gray-500 font-medium italic">Alle Rezepte für heute durch!</p>
+                  <button onClick={() => setView('home')} className="bg-gray-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg">Zum Dashboard</button>
                 </div>
               )}
             </motion.div>
@@ -311,25 +307,23 @@ const App: React.FC = () => {
                     <div className="flex justify-between items-center bg-white p-5 rounded-[2.5rem] border border-gray-100 shadow-sm">
                       <div>
                         <h2 className="text-2xl font-bold text-gray-900 px-1">Bibliothek</h2>
-                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1">Alle globalen Rezepte</p>
+                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1">Alle Rezepte ({allRecipes.length})</p>
                       </div>
                       <button onClick={() => setIsAddingRecipe(true)} className="bg-orange-600 text-white p-4 rounded-full shadow-lg hover:bg-orange-700 transition-all active:scale-90"><Plus size={24} /></button>
                     </div>
                     <div className="space-y-4 pb-12">
-                      {allRecipes.length === 0 && !isLoading && (
-                        <div className="text-center py-20 bg-gray-50 rounded-[3rem] border-2 border-dashed border-gray-200">
-                          <BookOpen className="mx-auto text-gray-300 mb-4" size={48} />
-                          <p className="text-gray-400 font-medium italic text-center px-4">Die Bibliothek ist leer.<br/>Sei der Erste!</p>
-                        </div>
-                      )}
                       {allRecipes.map(r => (
-                        <div key={r.id} className="flex gap-4 p-4 bg-white rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group overflow-hidden">
-                          <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 border border-gray-50 bg-gray-50">
-                            <img src={r.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={r.title} />
+                        <div 
+                          key={r.id} 
+                          onClick={() => setSelectedRecipe(r)}
+                          className="flex gap-4 p-4 bg-white rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group cursor-pointer"
+                        >
+                          <div className="w-20 h-20 rounded-2xl overflow-hidden flex-shrink-0 bg-gray-50">
+                            <img src={r.imageUrl} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt={r.title} />
                           </div>
-                          <div className="overflow-hidden flex flex-col justify-center pr-2">
+                          <div className="flex flex-col justify-center overflow-hidden">
                             <h4 className="font-bold text-gray-900 truncate">{r.title}</h4>
-                            <p className="text-[11px] text-gray-400 line-clamp-2 mt-1 italic leading-relaxed">{r.recipeText}</p>
+                            <p className="text-[10px] text-gray-400 line-clamp-2 mt-1 italic leading-relaxed">{r.recipeText}</p>
                           </div>
                         </div>
                       ))}
@@ -343,30 +337,24 @@ const App: React.FC = () => {
           {view === 'profile' && (
             <motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8 pt-4">
               <div className="bg-white rounded-[2.5rem] p-8 shadow-lg border border-gray-100">
-                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8">Setup</h2>
+                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8 text-center">Setup</h2>
                 <div className="space-y-6">
-                  <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">Dein Name</label>
-                    <input value={userName} onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none focus:ring-2 ring-orange-500/20 text-gray-900 font-bold" />
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">Dein Name</label>
+                    <input value={userName} onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} className="w-full bg-gray-50 p-4 rounded-2xl border-none outline-none focus:ring-2 ring-orange-500/20 text-gray-900 font-bold" />
                   </div>
-                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative">
-                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2">Deine ID (Für den Partner)</label>
+                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100">
+                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2">Deine ID (Teilen)</label>
                     <div className="flex justify-between items-center">
-                      <span className="font-mono font-black text-lg text-orange-900 tracking-tighter italic">{userId}</span>
-                      <button onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="p-3 bg-white rounded-xl shadow-sm hover:scale-110 transition-transform text-orange-600">
-                        {copied ? <Check size={20} className="text-emerald-500" /> : <Copy size={20} />}
+                      <span className="font-mono font-black text-lg text-orange-900 italic tracking-tighter">{userId}</span>
+                      <button onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="p-2 bg-white rounded-xl shadow-sm hover:scale-105 transition-transform text-orange-600">
+                        {copied ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
                       </button>
                     </div>
                   </div>
-                  <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">ID deines Partners</label>
-                    <input value={partnerId} onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 focus:ring-2 ring-orange-500/20 placeholder:text-gray-300" placeholder="XXXXXX" />
-                    <p className="text-[9px] text-gray-400 mt-2 italic px-1">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
-                  </div>
-                  <div className="pt-6 border-t border-gray-100">
-                    <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic">Alle Rezepte sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek.</p>
-                    </div>
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2">ID deines Partners</label>
+                    <input value={partnerId} onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} className="w-full bg-gray-50 p-4 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 placeholder:text-gray-300" placeholder="XXXXXX" />
                   </div>
                 </div>
               </div>
@@ -374,6 +362,38 @@ const App: React.FC = () => {
           )}
         </AnimatePresence>
       </main>
+
+      {/* Recipe Detail Modal */}
+      <AnimatePresence>
+        {selectedRecipe && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 backdrop-blur-sm p-4"
+            onClick={() => setSelectedRecipe(null)}
+          >
+            <motion.div 
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="bg-white w-full max-w-md rounded-t-[3rem] p-8 max-h-[85vh] overflow-y-auto relative"
+              onClick={e => e.stopPropagation()}
+            >
+              <button onClick={() => setSelectedRecipe(null)} className="absolute top-6 right-8 p-2 bg-gray-100 rounded-full text-gray-500 hover:text-gray-800 transition-colors z-10"><X size={20} /></button>
+              <div className="w-full h-56 rounded-[2rem] overflow-hidden mb-6 shadow-md border border-gray-100">
+                <img src={selectedRecipe.imageUrl} className="w-full h-full object-cover" alt={selectedRecipe.title} />
+              </div>
+              <h2 className="text-2xl font-black text-gray-900 mb-4 pr-10">{selectedRecipe.title}</h2>
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-[10px] font-black text-orange-500 uppercase tracking-widest border-b border-orange-50 pb-2">
+                  <BookOpen size={14} /> Rezeptur & Anleitung
+                </div>
+                <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap pb-10 italic">
+                  {selectedRecipe.recipeText}
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-2xl border-t border-gray-100 px-6 py-6 flex justify-between items-center z-40">
         <NavButton active={view === 'home'} icon={ChefHat} label="Start" onClick={() => setView('home')} />
@@ -384,7 +404,12 @@ const App: React.FC = () => {
 
       <AnimatePresence>
         {currentMatch && (
-          <MatchCelebration recipe={currentMatch} user={{id: userId, name: userName, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`} as any} partner={{name: "Dein Partner", avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId}`} as any} onClose={() => setCurrentMatch(null)} />
+          <MatchCelebration 
+            recipe={currentMatch} 
+            user={{id: userId, name: userName, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`} as any} 
+            partner={{name: "Dein Partner", avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId}`} as any} 
+            onClose={() => setCurrentMatch(null)} 
+          />
         )}
       </AnimatePresence>
     </div>
@@ -392,8 +417,8 @@ const App: React.FC = () => {
 };
 
 const NavButton: React.FC<{active: boolean, icon: LucideIcon, label: string, onClick: () => void}> = ({ active, icon: Icon, label, onClick }) => (
-  <button onClick={onClick} className={`flex flex-col items-center gap-1.5 transition-all ${active ? 'text-orange-600 scale-110' : 'text-gray-400 hover:text-gray-600'}`}>
-    <div className={`p-2.5 rounded-[1.2rem] transition-all duration-300 ${active ? 'bg-orange-100 shadow-inner border border-orange-200/50' : ''}`}>
+  <button onClick={onClick} className={`flex flex-col items-center gap-1.5 transition-all ${active ? 'text-orange-600 scale-105' : 'text-gray-400 hover:text-gray-600'}`}>
+    <div className={`p-2.5 rounded-[1.2rem] transition-all duration-300 ${active ? 'bg-orange-100 shadow-sm border border-orange-200/30' : ''}`}>
       <Icon size={22} strokeWidth={active ? 2.5 : 2} />
     </div>
     <span className="text-[9px] font-black uppercase tracking-widest">{label}</span>
