@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Recipe, Swipe, Match } from './types';
 import { supabase } from './lib/supabase';
@@ -18,7 +17,8 @@ import {
   Loader2,
   User as UserIcon,
   Copy,
-  Check
+  Check,
+  LucideIcon
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -31,13 +31,8 @@ const App: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [currentMatch, setCurrentMatch] = useState<Recipe | null>(null);
   const [view, setView] = useState<'home' | 'swipe' | 'recipes' | 'profile'>('home');
-  const [isAddingRecipe, setIsAddingRecipe] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [newRecipe, setNewRecipe] = useState({ title: '', content: '', imageData: '' });
   
   const today = new Date().toISOString().split('T')[0];
 
@@ -62,7 +57,6 @@ const App: React.FC = () => {
           .order('created_at', { ascending: false });
 
         if (recipeError || !recipesData || recipesData.length === 0) {
-          console.warn("Nutze lokale Fallback-Rezepte.");
           setAllRecipes(INITIAL_RECIPES);
         } else {
           setAllRecipes(recipesData.map(r => ({
@@ -75,7 +69,7 @@ const App: React.FC = () => {
           if (swipesData) setSwipes(swipesData);
         }
       } catch (err) {
-        console.error("Daten konnten nicht geladen werden:", err);
+        console.error("Fehler beim Laden:", err);
         setAllRecipes(INITIAL_RECIPES);
       } finally {
         setIsLoading(false);
@@ -115,7 +109,7 @@ const App: React.FC = () => {
     try {
       await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type, day: today });
     } catch (e) {
-      console.error("Swipe konnte nicht gespeichert werden (Prüfe Supabase Key)");
+      console.error("Supabase Error:", e);
     }
   }, [userId, dailyRecipe, today]);
 
@@ -219,7 +213,6 @@ const App: React.FC = () => {
             <motion.div key="recipes" className="space-y-6 pt-4">
               <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-bold text-gray-900">Bibliothek</h2>
-                <button onClick={() => setIsAddingRecipe(true)} className="bg-orange-600 text-white p-3 rounded-2xl shadow-lg"><Plus size={24} /></button>
               </div>
               <div className="space-y-4">
                 {allRecipes.map(r => (
@@ -266,10 +259,10 @@ const App: React.FC = () => {
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/80 backdrop-blur-xl border-t border-gray-100 px-6 py-5 flex justify-between items-center z-40">
-        <NavButton active={view === 'home'} icon={<ChefHat />} label="Home" onClick={() => setView('home')} />
-        <NavButton active={view === 'swipe'} icon={<UtensilsCrossed />} label="Swipe" onClick={() => setView('swipe')} />
-        <NavButton active={view === 'recipes'} icon={<PlusCircle />} label="Rezepte" onClick={() => setView('recipes')} />
-        <NavButton active={view === 'profile'} icon={<UserIcon />} label="Profil" onClick={() => setView('profile')} />
+        <NavButton active={view === 'home'} icon={ChefHat} label="Home" onClick={() => setView('home')} />
+        <NavButton active={view === 'swipe'} icon={UtensilsCrossed} label="Swipe" onClick={() => setView('swipe')} />
+        <NavButton active={view === 'recipes'} icon={PlusCircle} label="Rezepte" onClick={() => setView('recipes')} />
+        <NavButton active={view === 'profile'} icon={UserIcon} label="Profil" onClick={() => setView('profile')} />
       </nav>
 
       <AnimatePresence>
@@ -286,10 +279,10 @@ const App: React.FC = () => {
   );
 };
 
-const NavButton: React.FC<{active: boolean, icon: any, label: string, onClick: any}> = ({ active, icon, label, onClick }) => (
+const NavButton: React.FC<{active: boolean, icon: LucideIcon, label: string, onClick: () => void}> = ({ active, icon: Icon, label, onClick }) => (
   <button onClick={onClick} className={`flex flex-col items-center gap-1 transition-all ${active ? 'text-orange-600' : 'text-gray-400'}`}>
     <div className={`p-2 rounded-xl transition-colors ${active ? 'bg-orange-100' : ''}`}>
-      {React.cloneElement(icon as React.ReactElement, { size: 20 })}
+      <Icon size={20} />
     </div>
     <span className="text-[9px] font-bold uppercase tracking-wider">{label}</span>
   </button>
