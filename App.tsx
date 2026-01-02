@@ -40,13 +40,13 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState(false);
   
   const today = new Date().toISOString().split('T')[0];
-  
-  // Ref verwenden, um in Realtime-Callbacks immer die aktuellen Rezepte zu haben, ohne Endlosschleifen zu triggern
   const recipesRef = useRef<Recipe[]>([]);
+
   useEffect(() => {
     recipesRef.current = allRecipes;
   }, [allRecipes]);
 
+  // Initialisierung der User ID (Kurz-ID für einfaches Pairing)
   useEffect(() => {
     if (!userId) {
       const newId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -56,14 +56,18 @@ const App: React.FC = () => {
   }, [userId]);
 
   const fetchGlobalData = useCallback(async (silent = false) => {
+    if (!userId) return;
+    
     try {
       if (!silent) setIsLoading(true);
       
-      const { data: recipesData } = await supabase
+      const { data: recipesData, error: recipesError } = await supabase
         .from('recipes')
         .select('*')
         .order('created_at', { ascending: false });
       
+      if (recipesError) throw recipesError;
+
       if (recipesData) {
         const formatted = recipesData.map(r => ({
           id: r.id, 
@@ -75,46 +79,46 @@ const App: React.FC = () => {
         setAllRecipes(formatted);
       }
 
-      if (userId) {
-        const { data: swipesData } = await supabase
-          .from('swipes')
-          .select('*')
-          .eq('day', today)
-          .eq('user_id', userId);
+      const { data: swipesData, error: swipesError } = await supabase
+        .from('swipes')
+        .select('*')
+        .eq('day', today)
+        .eq('user_id', userId);
           
-        if (swipesData) {
-          setSwipes(swipesData.map(s => ({
-            id: s.id, userId: s.user_id, recipeId: s.recipe_id, type: s.type as SwipeType, date: s.day
-          })));
-        }
+      if (swipesError) throw swipesError;
+
+      if (swipesData) {
+        setSwipes(swipesData.map(s => ({
+          id: s.id.toString(), userId: s.user_id, recipeId: s.recipe_id, type: s.type as SwipeType, date: s.day
+        })));
       }
-    } catch (err) {
-      console.error("Daten konnten nicht geladen werden:", err);
+    } catch (err: any) {
+      console.error("Daten konnten nicht geladen werden:", err.message);
+      // Wenn der Fehler UUID-bezogen ist, zeigen wir einen hilfreichen Hinweis
+      if (err.message.includes('uuid')) {
+        alert("Datenbank-Fehler: Der Datentyp in Supabase ist falsch. Bitte führe das bereitgestellte SQL-Script im Supabase Editor aus.");
+      }
     } finally {
       setIsLoading(false);
     }
   }, [userId, today]);
 
-  // Initialer Load
   useEffect(() => {
-    fetchGlobalData();
-  }, [fetchGlobalData]);
+    if (userId) {
+      fetchGlobalData();
+    }
+  }, [fetchGlobalData, userId]);
 
-  // Realtime Setup - Nur einmal initialisieren oder wenn sich PartnerId/Today ändert
   useEffect(() => {
-    if (!isSupabaseConnected) return;
+    if (!isSupabaseConnected || !userId) return;
 
     const channel = (supabase.channel('global-sync') as any)
       .on('postgres_changes', { event: 'INSERT', table: 'recipes' }, () => {
-        // Leises Update im Hintergrund
         fetchGlobalData(true);
       })
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
-        // Wenn MEIN PARTNER heute geliked hat
         if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-          // Wir brauchen Zugriff auf die aktuellen Swipes. 
-          // Statt swipes als Abhängigkeit zu nutzen (was den Loop triggert), nutzen wir setSwipes mit funktionalem Update
           setSwipes(currentSwipes => {
             const myLike = currentSwipes.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
             if (myLike) {
@@ -130,7 +134,7 @@ const App: React.FC = () => {
     return () => { 
       supabase.removeChannel(channel); 
     };
-  }, [partnerId, today, fetchGlobalData]);
+  }, [partnerId, today, fetchGlobalData, userId]);
 
   const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
   
@@ -145,7 +149,6 @@ const App: React.FC = () => {
     if (!dailyRecipe || !userId) return;
     const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
     
-    // Lokal sofort markieren
     const newLocalSwipe: Swipe = { id: 'temp-' + Date.now(), userId, recipeId: dailyRecipe.id, type: swipeType, date: today };
     setSwipes(prev => [...prev, newLocalSwipe]);
     
@@ -157,7 +160,7 @@ const App: React.FC = () => {
     });
 
     if (error) {
-      alert("Fehler beim Speichern.");
+      alert("Fehler beim Speichern: " + error.message);
       return;
     }
     
@@ -177,7 +180,11 @@ const App: React.FC = () => {
   }, [userId, dailyRecipe, today, partnerId]);
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
-    const newId = Math.random().toString(36).substring(7);
+    // Für Rezepte verwenden wir eine echte UUID, da der User diese nie manuell eintippen muss
+    const newId = typeof crypto.randomUUID === 'function' 
+      ? crypto.randomUUID() 
+      : Math.random().toString(36).substring(2) + Date.now().toString(36);
+
     try {
       const { error } = await supabase.from('recipes').insert({
         id: newId, 
@@ -192,12 +199,11 @@ const App: React.FC = () => {
       setIsAddingRecipe(false);
       setView('recipes');
       fetchGlobalData(true);
-    } catch (e) { 
-      alert("Fehler beim Hochladen.");
+    } catch (e: any) { 
+      alert("Fehler beim Hochladen: " + e.message);
     }
   };
 
-  // Spinner nur zeigen, wenn wir WIRKLICH noch keine Daten haben und laden
   if (isLoading && allRecipes.length === 0) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#fdfcfb]">
@@ -237,8 +243,8 @@ const App: React.FC = () => {
             <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pt-4">
               <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-orange-100/50 border border-orange-50 relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-6"><ChefHat className="text-orange-200" size={40} /></div>
-                <h2 className="text-xl font-bold text-gray-900 mb-2">Heute entscheiden</h2>
-                <p className="text-gray-500 text-sm mb-8 leading-relaxed italic">Ein Rezept, eine Wahl. Seid ihr euch einig?</p>
+                <h2 className="text-xl font-bold text-gray-900 mb-2 text-left">Heute entscheiden</h2>
+                <p className="text-gray-500 text-sm mb-8 leading-relaxed italic text-left">Ein Rezept, eine Wahl. Seid ihr euch einig?</p>
                 
                 {!hasSwipedToday ? (
                   <button 
@@ -286,7 +292,7 @@ const App: React.FC = () => {
                 <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
                   <div className="bg-orange-100 p-6 rounded-full text-orange-600 shadow-inner"><CheckCircle2 size={48} /></div>
                   <h2 className="text-2xl font-bold italic">Bis morgen!</h2>
-                  <p className="text-gray-500 max-w-[200px]">Ihr beide bekommt jeden Tag das gleiche Rezept zum Voten.</p>
+                  <p className="text-gray-500 max-w-[200px] mx-auto">Ihr beide bekommt jeden Tag das gleiche Rezept zum Voten.</p>
                   <button onClick={() => setView('home')} className="mt-4 bg-gray-900 text-white px-8 py-3 rounded-xl font-bold shadow-lg">Zum Dashboard</button>
                 </div>
               ) : dailyRecipe ? (
@@ -310,7 +316,7 @@ const App: React.FC = () => {
                   <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                     <div className="flex justify-between items-center bg-white p-5 rounded-[2.5rem] border border-gray-100 shadow-sm">
                       <div>
-                        <h2 className="text-2xl font-bold text-gray-900 px-1">Bibliothek</h2>
+                        <h2 className="text-2xl font-bold text-gray-900 px-1 text-left">Bibliothek</h2>
                         <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1 text-left">Alle globalen Rezepte</p>
                       </div>
                       <button 
@@ -352,8 +358,8 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8 text-left">Setup</h2>
                 
                 <div className="space-y-6">
-                  <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors text-left">Dein Name</label>
+                  <div className="group text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">Dein Name</label>
                     <input 
                       value={userName} 
                       onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} 
@@ -361,8 +367,8 @@ const App: React.FC = () => {
                     />
                   </div>
 
-                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative">
-                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2 text-left">Deine ID (Für den Partner)</label>
+                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative text-left">
+                    <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2">Deine ID (Für den Partner)</label>
                     <div className="flex justify-between items-center">
                       <span className="font-mono font-black text-lg text-orange-900 tracking-tighter italic">{userId}</span>
                       <button 
@@ -374,20 +380,20 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="group">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors text-left">ID deines Partners</label>
+                  <div className="group text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">ID deines Partners</label>
                     <input 
                       value={partnerId} 
                       onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} 
                       className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 focus:ring-2 ring-orange-500/20 placeholder:text-gray-300" 
                       placeholder="XXXXXX" 
                     />
-                    <p className="text-[9px] text-gray-400 mt-2 italic px-1 text-left">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
+                    <p className="text-[9px] text-gray-400 mt-2 italic px-1">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
                   </div>
                   
-                  <div className="pt-6 border-t border-gray-100">
+                  <div className="pt-6 border-t border-gray-100 text-left">
                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic text-left">
+                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic">
                         Alle Rezepte sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek für alle User.
                       </p>
                     </div>
