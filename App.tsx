@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Recipe, Swipe, Match, SwipeType } from './types';
 import { supabase, isSupabaseConnected } from './lib/supabase';
 import { INITIAL_RECIPES } from './lib/mockData';
@@ -40,6 +40,12 @@ const App: React.FC = () => {
   const [copied, setCopied] = useState(false);
   
   const today = new Date().toISOString().split('T')[0];
+  
+  // Ref verwenden, um in Realtime-Callbacks immer die aktuellen Rezepte zu haben, ohne Endlosschleifen zu triggern
+  const recipesRef = useRef<Recipe[]>([]);
+  useEffect(() => {
+    recipesRef.current = allRecipes;
+  }, [allRecipes]);
 
   useEffect(() => {
     if (!userId) {
@@ -49,9 +55,9 @@ const App: React.FC = () => {
     }
   }, [userId]);
 
-  const fetchGlobalData = useCallback(async () => {
+  const fetchGlobalData = useCallback(async (silent = false) => {
     try {
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       
       const { data: recipesData } = await supabase
         .from('recipes')
@@ -89,24 +95,33 @@ const App: React.FC = () => {
     }
   }, [userId, today]);
 
+  // Initialer Load
   useEffect(() => {
     fetchGlobalData();
+  }, [fetchGlobalData]);
 
-    // Fix für TS2769: Cast zu 'any' um den Build-Fehler zu vermeiden
+  // Realtime Setup - Nur einmal initialisieren oder wenn sich PartnerId/Today ändert
+  useEffect(() => {
+    if (!isSupabaseConnected) return;
+
     const channel = (supabase.channel('global-sync') as any)
       .on('postgres_changes', { event: 'INSERT', table: 'recipes' }, () => {
-        fetchGlobalData();
+        // Leises Update im Hintergrund
+        fetchGlobalData(true);
       })
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
+        // Wenn MEIN PARTNER heute geliked hat
         if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-          setSwipes(current => {
-            const myLike = current.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
+          // Wir brauchen Zugriff auf die aktuellen Swipes. 
+          // Statt swipes als Abhängigkeit zu nutzen (was den Loop triggert), nutzen wir setSwipes mit funktionalem Update
+          setSwipes(currentSwipes => {
+            const myLike = currentSwipes.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
             if (myLike) {
-              const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
+              const matchedRecipe = recipesRef.current.find(r => r.id === newSwipe.recipe_id);
               if (matchedRecipe) setCurrentMatch(matchedRecipe);
             }
-            return current;
+            return currentSwipes;
           });
         }
       })
@@ -115,7 +130,7 @@ const App: React.FC = () => {
     return () => { 
       supabase.removeChannel(channel); 
     };
-  }, [fetchGlobalData, partnerId, today, allRecipes]);
+  }, [partnerId, today, fetchGlobalData]);
 
   const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
   
@@ -130,6 +145,7 @@ const App: React.FC = () => {
     if (!dailyRecipe || !userId) return;
     const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
     
+    // Lokal sofort markieren
     const newLocalSwipe: Swipe = { id: 'temp-' + Date.now(), userId, recipeId: dailyRecipe.id, type: swipeType, date: today };
     setSwipes(prev => [...prev, newLocalSwipe]);
     
@@ -175,17 +191,20 @@ const App: React.FC = () => {
 
       setIsAddingRecipe(false);
       setView('recipes');
-      fetchGlobalData();
+      fetchGlobalData(true);
     } catch (e) { 
       alert("Fehler beim Hochladen.");
     }
   };
 
+  // Spinner nur zeigen, wenn wir WIRKLICH noch keine Daten haben und laden
   if (isLoading && allRecipes.length === 0) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#fdfcfb]">
         <Loader2 className="animate-spin text-orange-600 mb-4" size={48} />
-        <p className="text-gray-400 font-bold text-xs uppercase tracking-widest text-center">Cloud Sync...<br/>DinnerMatch wird geladen</p>
+        <p className="text-gray-400 font-bold text-xs uppercase tracking-widest text-center px-6 leading-loose">
+          Synchronisation...<br/>DinnerMatch wird vorbereitet
+        </p>
       </div>
     );
   }
@@ -232,7 +251,7 @@ const App: React.FC = () => {
                   <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
                     <span className="text-emerald-900 font-bold">Wahl getroffen!</span>
-                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic text-center">Warte auf deinen Partner...</p>
+                    <p className="text-emerald-600 text-[10px] mt-1 uppercase font-bold tracking-widest italic text-center px-4">Warte auf deinen Partner...</p>
                   </div>
                 )}
               </div>
@@ -242,7 +261,7 @@ const App: React.FC = () => {
                   <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2">
                     <Users size={18} className="text-orange-500" /> Community-Status
                   </h3>
-                  <button onClick={fetchGlobalData} className="text-gray-400 p-2 hover:text-orange-500 transition-colors">
+                  <button onClick={() => fetchGlobalData()} className="text-gray-400 p-2 hover:text-orange-500 transition-colors">
                     <RefreshCw size={18} />
                   </button>
                 </div>
@@ -292,7 +311,7 @@ const App: React.FC = () => {
                     <div className="flex justify-between items-center bg-white p-5 rounded-[2.5rem] border border-gray-100 shadow-sm">
                       <div>
                         <h2 className="text-2xl font-bold text-gray-900 px-1">Bibliothek</h2>
-                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1">Alle globalen Rezepte</p>
+                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1 text-left">Alle globalen Rezepte</p>
                       </div>
                       <button 
                         onClick={() => setIsAddingRecipe(true)} 
@@ -314,7 +333,7 @@ const App: React.FC = () => {
                           <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 border border-gray-50 bg-gray-50">
                             <img src={r.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={r.title} />
                           </div>
-                          <div className="overflow-hidden flex flex-col justify-center pr-2">
+                          <div className="overflow-hidden flex flex-col justify-center pr-2 text-left">
                             <h4 className="font-bold text-gray-900 truncate">{r.title}</h4>
                             <p className="text-[11px] text-gray-400 line-clamp-2 mt-1 italic leading-relaxed">{r.recipeText}</p>
                           </div>
@@ -330,7 +349,7 @@ const App: React.FC = () => {
           {view === 'profile' && (
             <motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8 pt-4">
               <div className="bg-white rounded-[2.5rem] p-8 shadow-lg border border-gray-100">
-                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8">Setup</h2>
+                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8 text-left">Setup</h2>
                 
                 <div className="space-y-6">
                   <div className="group">
