@@ -1,0 +1,5 @@
+{
+  "name": "DinnerMatch",
+  "description": "Eine Tinder-ähnliche App für Paare, um gemeinsam zu entscheiden, was es zum Abendessen gibt. Mit täglichem Limit und Echtzeit-Matching.",
+  "requestFramePermissions": []
+}
