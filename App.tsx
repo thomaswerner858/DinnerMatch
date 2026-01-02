@@ -27,7 +27,6 @@ const App: React.FC = () => {
   const [partnerId, setPartnerId] = useState<string>(() => localStorage.getItem('dm_partner_id') || '');
   const [userName, setUserName] = useState<string>(() => localStorage.getItem('dm_user_name') || 'Ich');
   
-  // Lade initial aus LocalStorage als Fallback
   const [allRecipes, setAllRecipes] = useState<Recipe[]>(() => {
     const saved = localStorage.getItem('dm_local_recipes');
     return saved ? JSON.parse(saved) : INITIAL_RECIPES;
@@ -43,7 +42,6 @@ const App: React.FC = () => {
   
   const today = new Date().toISOString().split('T')[0];
 
-  // User ID Initialisierung
   useEffect(() => {
     if (!userId) {
       const newId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
@@ -54,7 +52,6 @@ const App: React.FC = () => {
     }
   }, [userId]);
 
-  // Datenladen
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -82,7 +79,7 @@ const App: React.FC = () => {
           if (swipesData) setSwipes(swipesData);
         }
       } catch (err) {
-        console.error("Fehler beim Laden (nutze lokale Daten):", err);
+        console.error("Daten konnten nicht von Cloud geladen werden, nutze Lokalspeicher.");
       } finally {
         setIsLoading(false);
       }
@@ -90,7 +87,6 @@ const App: React.FC = () => {
 
     fetchData();
 
-    // Realtime Subscription nur wenn partnerId vorhanden
     if (partnerId) {
       const channel = (supabase as any).channel('swipes_realtime')
         .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
@@ -106,7 +102,7 @@ const App: React.FC = () => {
 
       return () => { supabase.removeChannel(channel); };
     }
-  }, [userId, partnerId, today]); // allRecipes.length entfernt, um Loop zu vermeiden
+  }, [userId, partnerId, today]);
 
   const hasSwipedToday = useMemo(() => swipes.some(s => (s as any).user_id === userId), [swipes, userId]);
   
@@ -121,41 +117,49 @@ const App: React.FC = () => {
     if (!dailyRecipe || !userId) return;
     const type = direction === 'right' ? 'like' : 'dislike';
     
-    // UI sofort aktualisieren
     setSwipes(prev => [...prev, { id: 'temp-' + Date.now(), user_id: userId, recipe_id: dailyRecipe.id, type, day: today } as any]);
     
     try {
       await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type, day: today });
     } catch (e) {
-      console.warn("Konnte Swipe nicht in Cloud speichern, bleibt lokal.");
+      console.warn("Swipe nur lokal gespeichert.");
     }
   }, [userId, dailyRecipe, today]);
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
+    const newId = Math.random().toString(36).substring(7) + Date.now().toString(36).substring(4);
     const newRecipe: Recipe = {
       ...recipeData,
-      id: Math.random().toString(36).substring(7) + Date.now().toString(36).substring(4),
+      id: newId,
       createdBy: userId
     };
 
-    // 1. Lokalen Status sofort aktualisieren
-    const updatedRecipes = [newRecipe, ...allRecipes];
-    setAllRecipes(updatedRecipes);
-    localStorage.setItem('dm_local_recipes', JSON.stringify(updatedRecipes));
-    
-    // 2. Ansicht wechseln
-    setIsAddingRecipe(false);
-
-    // 3. Im Hintergrund in DB speichern (wenn möglich)
     try {
+      // 1. Lokaler Zustand zuerst
+      const updatedRecipes = [newRecipe, ...allRecipes];
+      
+      // Versuche localStorage (kann bei zu großen Bildern trotzdem scheitern)
+      try {
+        localStorage.setItem('dm_local_recipes', JSON.stringify(updatedRecipes));
+      } catch (storageError) {
+        console.error("LocalStorage Limit erreicht, Rezept wird nur im Speicher gehalten.");
+      }
+
+      setAllRecipes(updatedRecipes);
+      setIsAddingRecipe(false);
+      setView('recipes'); // Sicherstellen, dass wir zur Liste zurückkehren
+
+      // 2. Cloud-Backup im Hintergrund
       await supabase.from('recipes').insert({
+        id: newId,
         title: recipeData.title,
         content: recipeData.recipeText,
         image_url: recipeData.imageUrl,
         created_by: userId
       });
+
     } catch (e) {
-      console.warn("Konnte Rezept nicht in Cloud speichern, bleibt lokal verfügbar.");
+      console.error("Konnte Rezept nicht vollständig synchronisieren:", e);
     }
   };
 
@@ -184,7 +188,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen max-w-md mx-auto bg-[#fdfcfb] flex flex-col relative overflow-hidden shadow-2xl border-x border-gray-100">
       <header className="px-6 py-8 flex justify-between items-center bg-white/50 backdrop-blur-sm sticky top-0 z-30">
-        <div>
+        <div onClick={() => setView('home')} className="cursor-pointer">
           <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
             DinnerMatch <UtensilsCrossed className="text-orange-500" size={24} />
           </h1>
@@ -192,7 +196,10 @@ const App: React.FC = () => {
             {partnerId ? `Verbunden` : `Single-Modus`}
           </p>
         </div>
-        <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold border-2 border-white shadow-sm uppercase">
+        <div 
+          onClick={() => setView('profile')}
+          className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold border-2 border-white shadow-sm uppercase cursor-pointer"
+        >
           {userName ? userName[0] : '?'}
         </div>
       </header>
@@ -289,7 +296,7 @@ const App: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="space-y-4">
+                    <div className="space-y-4 pb-10">
                       {allRecipes.length === 0 ? (
                         <div className="text-center py-20 bg-gray-50 rounded-[2.5rem] border-2 border-dashed border-gray-200">
                           <PlusCircle className="mx-auto text-gray-200 mb-3" size={40} />
