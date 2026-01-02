@@ -4,6 +4,7 @@ import { Recipe, Swipe, Match } from './types';
 import { supabase } from './lib/supabase';
 import { INITIAL_RECIPES } from './lib/mockData';
 import SwipeCard from './components/SwipeCard';
+import RecipeForm from './components/RecipeForm';
 import MatchCelebration from './components/MatchCelebration';
 import { AnimatePresence, motion } from 'framer-motion';
 import { 
@@ -19,7 +20,9 @@ import {
   User as UserIcon,
   Copy,
   Check,
-  LucideIcon
+  LucideIcon,
+  Search,
+  BookOpen
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -32,6 +35,7 @@ const App: React.FC = () => {
   const [matches, setMatches] = useState<Match[]>([]);
   const [currentMatch, setCurrentMatch] = useState<Recipe | null>(null);
   const [view, setView] = useState<'home' | 'swipe' | 'recipes' | 'profile'>('home');
+  const [isAddingRecipe, setIsAddingRecipe] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   
@@ -61,7 +65,11 @@ const App: React.FC = () => {
           setAllRecipes(INITIAL_RECIPES);
         } else {
           setAllRecipes(recipesData.map(r => ({
-            id: r.id, title: r.title, description: r.content, ingredients: [], imageUrl: r.image_url, createdBy: r.created_by
+            id: r.id, 
+            title: r.title, 
+            recipeText: r.content || r.recipeText || '', 
+            imageUrl: r.image_url || r.imageUrl || '', 
+            createdBy: r.created_by || r.createdBy || ''
           })));
         }
 
@@ -79,7 +87,6 @@ const App: React.FC = () => {
 
     fetchData();
 
-    // Fix: Explicitly type the channel to avoid 'postgres_changes' error
     const channel = (supabase as any).channel('swipes_realtime')
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
@@ -99,7 +106,8 @@ const App: React.FC = () => {
   
   const dailyRecipe = useMemo(() => {
     if (allRecipes.length === 0) return null;
-    const dayIndex = new Date().getDate() % allRecipes.length;
+    const dayInt = new Date().getDate();
+    const dayIndex = dayInt % allRecipes.length;
     return allRecipes[dayIndex];
   }, [allRecipes]);
 
@@ -114,6 +122,28 @@ const App: React.FC = () => {
       console.error("Supabase Error:", e);
     }
   }, [userId, dailyRecipe, today]);
+
+  const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
+    const newRecipe: Recipe = {
+      ...recipeData,
+      id: Math.random().toString(36).substring(7),
+      createdBy: userId
+    };
+
+    try {
+      setAllRecipes(prev => [newRecipe, ...prev]);
+      setIsAddingRecipe(false);
+
+      await supabase.from('recipes').insert({
+        title: recipeData.title,
+        content: recipeData.recipeText,
+        image_url: recipeData.imageUrl,
+        created_by: userId
+      });
+    } catch (e) {
+      console.error("Fehler beim Speichern des Rezepts:", e);
+    }
+  };
 
   const copyId = () => {
     navigator.clipboard.writeText(userId);
@@ -162,7 +192,7 @@ const App: React.FC = () => {
                 <h2 className="text-xl font-bold text-gray-900 mb-2">Daily Match</h2>
                 <p className="text-gray-500 text-sm mb-8 leading-relaxed">Was gibt's heute Gutes?</p>
                 {!hasSwipedToday ? (
-                  <button onClick={() => setView('swipe')} disabled={!dailyRecipe} className="w-full bg-orange-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-orange-700">Vorschlag ansehen</button>
+                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-orange-700">Vorschlag ansehen</button>
                 ) : (
                   <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
@@ -172,7 +202,9 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <h3 className="font-bold text-gray-900 text-lg">Eure Matches</h3>
+                <div className="flex justify-between items-center">
+                  <h3 className="font-bold text-gray-900 text-lg">Eure Matches</h3>
+                </div>
                 {matches.length === 0 ? (
                   <div className="text-center py-16 bg-gray-50 rounded-[2.5rem] border-2 border-dashed border-gray-200">
                     <Heart className="mx-auto text-gray-200 mb-3" size={40} />
@@ -201,32 +233,72 @@ const App: React.FC = () => {
                 <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
                   <div className="bg-orange-100 p-6 rounded-full text-orange-600"><CheckCircle2 size={48} /></div>
                   <h2 className="text-2xl font-bold">Bis morgen!</h2>
+                  <p className="text-gray-500 max-w-[200px]">Du hast deine heutige Entscheidung bereits getroffen.</p>
                   <button onClick={() => setView('home')} className="mt-4 bg-gray-900 text-white px-8 py-3 rounded-xl font-bold">Dashboard</button>
                 </div>
               ) : dailyRecipe ? (
                 <SwipeCard recipe={dailyRecipe} onSwipe={handleSwipe} isTop={true} />
               ) : (
-                <div className="text-center p-10">Lädt Rezept...</div>
+                <div className="flex flex-col items-center justify-center h-full text-center space-y-6 px-10">
+                  <div className="bg-gray-100 p-8 rounded-[3rem]">
+                    <BookOpen className="text-gray-300 mx-auto mb-4" size={64} />
+                    <h2 className="text-xl font-bold text-gray-800 mb-2">Keine Rezepte</h2>
+                    <p className="text-gray-500 text-sm leading-relaxed">
+                      Füge zuerst Rezepte in deiner Bibliothek hinzu, um mit dem Swipen zu beginnen!
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setView('recipes')} 
+                    className="bg-orange-600 text-white px-8 py-4 rounded-2xl font-bold shadow-lg shadow-orange-100 hover:bg-orange-700 transition-all"
+                  >
+                    Zur Bibliothek
+                  </button>
+                </div>
               )}
             </motion.div>
           )}
 
           {view === 'recipes' && (
             <motion.div key="recipes" className="space-y-6 pt-4">
-              <div className="flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-gray-900">Bibliothek</h2>
-              </div>
-              <div className="space-y-4">
-                {allRecipes.map(r => (
-                  <div key={r.id} className="flex gap-4 p-4 bg-white rounded-2xl border border-gray-100">
-                    <img src={r.imageUrl} className="w-20 h-20 rounded-xl object-cover flex-shrink-0" />
-                    <div className="flex-grow overflow-hidden">
-                      <h4 className="font-bold text-gray-900 truncate">{r.title}</h4>
-                      <p className="text-xs text-gray-500 line-clamp-2 mt-1">{r.description}</p>
+              <AnimatePresence mode="wait">
+                {isAddingRecipe ? (
+                  <RecipeForm key="form" onSave={handleSaveRecipe} onCancel={() => setIsAddingRecipe(false)} />
+                ) : (
+                  <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                    <div className="flex justify-between items-center bg-white p-4 rounded-[2rem] border border-gray-100">
+                      <h2 className="text-2xl font-bold text-gray-900 px-2">Bibliothek</h2>
+                      <button 
+                        onClick={() => setIsAddingRecipe(true)}
+                        className="bg-orange-600 text-white p-3 rounded-full shadow-lg shadow-orange-100 hover:bg-orange-700 transition-colors"
+                      >
+                        <Plus size={24} />
+                      </button>
                     </div>
-                  </div>
-                ))}
-              </div>
+
+                    <div className="space-y-4">
+                      {allRecipes.length === 0 ? (
+                        <div className="text-center py-20 bg-gray-50 rounded-[2.5rem] border-2 border-dashed border-gray-200">
+                          <PlusCircle className="mx-auto text-gray-200 mb-3" size={40} />
+                          <p className="text-gray-400 text-sm">Füge dein erstes Rezept hinzu!</p>
+                        </div>
+                      ) : (
+                        allRecipes.map(r => (
+                          <div key={r.id} className="flex gap-4 p-4 bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow group">
+                            <div className="relative w-24 h-24 flex-shrink-0">
+                              <img src={r.imageUrl} className="w-full h-full rounded-2xl object-cover" />
+                              <div className="absolute inset-0 bg-black/5 rounded-2xl group-hover:bg-transparent transition-colors" />
+                            </div>
+                            <div className="flex-grow overflow-hidden flex flex-col justify-center">
+                              <h4 className="font-bold text-gray-900 truncate text-lg">{r.title}</h4>
+                              <p className="text-xs text-gray-500 line-clamp-2 mt-1 leading-relaxed italic">{r.recipeText}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           )}
 

@@ -35,7 +35,7 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
         />
         <div className="p-6 bg-white">
           <h3 className="text-2xl font-bold text-gray-800">{recipe.title}</h3>
-          <p className="text-gray-500 mt-2 line-clamp-2">{recipe.description}</p>
+          <p className="text-gray-500 mt-2 line-clamp-2">{recipe.recipeText}</p>
         </div>
       </div>
     );
@@ -50,7 +50,7 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
       whileTap={{ scale: 1.05 }}
       className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden cursor-grab active:cursor-grabbing border border-gray-100 flex flex-col"
     >
-      <div className="relative h-3/4 w-full overflow-hidden">
+      <div className="relative h-2/3 w-full overflow-hidden">
         <img 
           src={recipe.imageUrl} 
           alt={recipe.title} 
@@ -73,29 +73,16 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
         </motion.div>
       </div>
 
-      <div className="p-6 flex-grow flex flex-col justify-between">
-        <div>
-          <div className="flex justify-between items-start">
-            <h3 className="text-2xl font-bold text-gray-900 leading-tight">{recipe.title}</h3>
-            <button className="text-gray-400 hover:text-gray-600 transition-colors">
-              <Info size={20} />
-            </button>
-          </div>
-          <p className="text-gray-600 mt-2 text-sm md:text-base line-clamp-3">
-            {recipe.description}
-          </p>
+      <div className="p-6 flex-grow flex flex-col justify-start overflow-hidden">
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="text-2xl font-bold text-gray-900 leading-tight">{recipe.title}</h3>
+          <button className="text-gray-400 hover:text-gray-600 transition-colors">
+            <Info size={20} />
+          </button>
         </div>
-        
-        <div className="flex gap-2 flex-wrap mt-4">
-          {recipe.ingredients.slice(0, 3).map((ing, idx) => (
-            <span key={idx} className="bg-orange-50 text-orange-700 text-xs px-2 py-1 rounded-full font-medium">
-              {ing}
-            </span>
-          ))}
-          {recipe.ingredients.length > 3 && (
-            <span className="text-gray-400 text-xs py-1">+{recipe.ingredients.length - 3} weitere</span>
-          )}
-        </div>
+        <p className="text-gray-600 text-sm md:text-base leading-relaxed overflow-y-auto pr-2 custom-scrollbar">
+          {recipe.recipeText}
+        </p>
       </div>
     </motion.div>
   );

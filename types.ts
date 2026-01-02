@@ -2,8 +2,7 @@
 export interface Recipe {
   id: string;
   title: string;
-  description: string;
-  ingredients: string[];
+  recipeText: string; // Zusammengefasst aus Beschreibung und Zutaten
   imageUrl: string;
   createdBy: string;
 }
