@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Recipe, Swipe, Match } from './types';
 import { supabase } from './lib/supabase';
 import { INITIAL_RECIPES } from './lib/mockData';
@@ -13,15 +13,12 @@ import {
   CheckCircle2,
   UtensilsCrossed,
   Heart,
-  X,
   Plus,
-  Upload,
   Loader2,
   User as UserIcon,
   Copy,
   Check,
   LucideIcon,
-  Search,
   BookOpen
 } from 'lucide-react';
 
@@ -30,7 +27,12 @@ const App: React.FC = () => {
   const [partnerId, setPartnerId] = useState<string>(() => localStorage.getItem('dm_partner_id') || '');
   const [userName, setUserName] = useState<string>(() => localStorage.getItem('dm_user_name') || 'Ich');
   
-  const [allRecipes, setAllRecipes] = useState<Recipe[]>([]);
+  // Lade initial aus LocalStorage als Fallback
+  const [allRecipes, setAllRecipes] = useState<Recipe[]>(() => {
+    const saved = localStorage.getItem('dm_local_recipes');
+    return saved ? JSON.parse(saved) : INITIAL_RECIPES;
+  });
+  
   const [swipes, setSwipes] = useState<Swipe[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [currentMatch, setCurrentMatch] = useState<Recipe | null>(null);
@@ -41,6 +43,7 @@ const App: React.FC = () => {
   
   const today = new Date().toISOString().split('T')[0];
 
+  // User ID Initialisierung
   useEffect(() => {
     if (!userId) {
       const newId = (typeof crypto !== 'undefined' && crypto.randomUUID) 
@@ -51,6 +54,7 @@ const App: React.FC = () => {
     }
   }, [userId]);
 
+  // Datenladen
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -61,16 +65,16 @@ const App: React.FC = () => {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (recipeError || !recipesData || recipesData.length === 0) {
-          setAllRecipes(INITIAL_RECIPES);
-        } else {
-          setAllRecipes(recipesData.map(r => ({
+        if (!recipeError && recipesData && recipesData.length > 0) {
+          const formattedRecipes = recipesData.map(r => ({
             id: r.id, 
             title: r.title, 
             recipeText: r.content || r.recipeText || '', 
             imageUrl: r.image_url || r.imageUrl || '', 
             createdBy: r.created_by || r.createdBy || ''
-          })));
+          }));
+          setAllRecipes(formattedRecipes);
+          localStorage.setItem('dm_local_recipes', JSON.stringify(formattedRecipes));
         }
 
         if (userId) {
@@ -78,8 +82,7 @@ const App: React.FC = () => {
           if (swipesData) setSwipes(swipesData);
         }
       } catch (err) {
-        console.error("Fehler beim Laden:", err);
-        setAllRecipes(INITIAL_RECIPES);
+        console.error("Fehler beim Laden (nutze lokale Daten):", err);
       } finally {
         setIsLoading(false);
       }
@@ -87,20 +90,23 @@ const App: React.FC = () => {
 
     fetchData();
 
-    const channel = (supabase as any).channel('swipes_realtime')
-      .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
-        const newSwipe = payload.new;
-        if (partnerId && newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-          const { data: mySwipe } = await supabase.from('swipes').select('*').eq('user_id', userId).eq('recipe_id', newSwipe.recipe_id).eq('day', today).eq('type', 'like').single();
-          if (mySwipe) {
-            const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
-            if (matchedRecipe) setCurrentMatch(matchedRecipe);
+    // Realtime Subscription nur wenn partnerId vorhanden
+    if (partnerId) {
+      const channel = (supabase as any).channel('swipes_realtime')
+        .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
+          const newSwipe = payload.new;
+          if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
+            const { data: mySwipe } = await supabase.from('swipes').select('*').eq('user_id', userId).eq('recipe_id', newSwipe.recipe_id).eq('day', today).eq('type', 'like').single();
+            if (mySwipe) {
+              const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
+              if (matchedRecipe) setCurrentMatch(matchedRecipe);
+            }
           }
-        }
-      }).subscribe();
+        }).subscribe();
 
-    return () => { supabase.removeChannel(channel); };
-  }, [userId, partnerId, today, allRecipes.length]);
+      return () => { supabase.removeChannel(channel); };
+    }
+  }, [userId, partnerId, today]); // allRecipes.length entfernt, um Loop zu vermeiden
 
   const hasSwipedToday = useMemo(() => swipes.some(s => (s as any).user_id === userId), [swipes, userId]);
   
@@ -114,26 +120,34 @@ const App: React.FC = () => {
   const handleSwipe = useCallback(async (direction: 'left' | 'right') => {
     if (!dailyRecipe || !userId) return;
     const type = direction === 'right' ? 'like' : 'dislike';
-    setSwipes(prev => [...prev, { id: 'temp', user_id: userId, recipe_id: dailyRecipe.id, type, day: today } as any]);
+    
+    // UI sofort aktualisieren
+    setSwipes(prev => [...prev, { id: 'temp-' + Date.now(), user_id: userId, recipe_id: dailyRecipe.id, type, day: today } as any]);
     
     try {
       await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type, day: today });
     } catch (e) {
-      console.error("Supabase Error:", e);
+      console.warn("Konnte Swipe nicht in Cloud speichern, bleibt lokal.");
     }
   }, [userId, dailyRecipe, today]);
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
     const newRecipe: Recipe = {
       ...recipeData,
-      id: Math.random().toString(36).substring(7),
+      id: Math.random().toString(36).substring(7) + Date.now().toString(36).substring(4),
       createdBy: userId
     };
 
-    try {
-      setAllRecipes(prev => [newRecipe, ...prev]);
-      setIsAddingRecipe(false);
+    // 1. Lokalen Status sofort aktualisieren
+    const updatedRecipes = [newRecipe, ...allRecipes];
+    setAllRecipes(updatedRecipes);
+    localStorage.setItem('dm_local_recipes', JSON.stringify(updatedRecipes));
+    
+    // 2. Ansicht wechseln
+    setIsAddingRecipe(false);
 
+    // 3. Im Hintergrund in DB speichern (wenn möglich)
+    try {
       await supabase.from('recipes').insert({
         title: recipeData.title,
         content: recipeData.recipeText,
@@ -141,7 +155,7 @@ const App: React.FC = () => {
         created_by: userId
       });
     } catch (e) {
-      console.error("Fehler beim Speichern des Rezepts:", e);
+      console.warn("Konnte Rezept nicht in Cloud speichern, bleibt lokal verfügbar.");
     }
   };
 
