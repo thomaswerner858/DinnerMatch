@@ -38,6 +38,7 @@ const App: React.FC = () => {
   const [isAddingRecipe, setIsAddingRecipe] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
   
   const today = new Date().toISOString().split('T')[0];
   const recipesRef = useRef<Recipe[]>([]);
@@ -60,6 +61,7 @@ const App: React.FC = () => {
     
     try {
       if (!silent) setIsLoading(true);
+      setDbError(null);
       
       const { data: recipesData, error: recipesError } = await supabase
         .from('recipes')
@@ -72,13 +74,14 @@ const App: React.FC = () => {
         const formatted = recipesData.map(r => ({
           id: r.id, 
           title: r.title, 
-          recipeText: r.content || r.recipeText || '', 
-          imageUrl: r.image_url || r.imageUrl || '', 
-          createdBy: r.created_by || r.createdBy || ''
+          recipeText: r.content || '', 
+          imageUrl: r.image_url || '', 
+          createdBy: r.created_by || ''
         }));
         setAllRecipes(formatted);
       }
 
+      // WICHTIG: Hier tritt der UUID Fehler auf, wenn die DB Spalte falsch ist
       const { data: swipesData, error: swipesError } = await supabase
         .from('swipes')
         .select('*')
@@ -89,14 +92,17 @@ const App: React.FC = () => {
 
       if (swipesData) {
         setSwipes(swipesData.map(s => ({
-          id: s.id.toString(), userId: s.user_id, recipeId: s.recipe_id, type: s.type as SwipeType, date: s.day
+          id: s.id.toString(), 
+          userId: s.user_id, 
+          recipeId: s.recipe_id, 
+          type: s.type as SwipeType, 
+          date: s.day
         })));
       }
     } catch (err: any) {
-      console.error("Daten konnten nicht geladen werden:", err.message);
-      // Wenn der Fehler UUID-bezogen ist, zeigen wir einen hilfreichen Hinweis
+      console.error("Sync Error:", err.message);
       if (err.message.includes('uuid')) {
-        alert("Datenbank-Fehler: Der Datentyp in Supabase ist falsch. Bitte führe das bereitgestellte SQL-Script im Supabase Editor aus.");
+        setDbError("Datenbank-Fehler: Die Tabelle erwartet eine UUID, erhält aber eine Kurz-ID. Bitte führe das SQL-Skript zur Bereinigung in Supabase aus.");
       }
     } finally {
       setIsLoading(false);
@@ -104,9 +110,7 @@ const App: React.FC = () => {
   }, [userId, today]);
 
   useEffect(() => {
-    if (userId) {
-      fetchGlobalData();
-    }
+    if (userId) fetchGlobalData();
   }, [fetchGlobalData, userId]);
 
   useEffect(() => {
@@ -118,6 +122,7 @@ const App: React.FC = () => {
       })
       .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
+        // Wenn Partner liked und es für heute ist
         if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
           setSwipes(currentSwipes => {
             const myLike = currentSwipes.find(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
@@ -131,9 +136,7 @@ const App: React.FC = () => {
       })
       .subscribe();
 
-    return () => { 
-      supabase.removeChannel(channel); 
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [partnerId, today, fetchGlobalData, userId]);
 
   const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
@@ -149,6 +152,7 @@ const App: React.FC = () => {
     if (!dailyRecipe || !userId) return;
     const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
     
+    // Optimistisches Update
     const newLocalSwipe: Swipe = { id: 'temp-' + Date.now(), userId, recipeId: dailyRecipe.id, type: swipeType, date: today };
     setSwipes(prev => [...prev, newLocalSwipe]);
     
@@ -161,9 +165,11 @@ const App: React.FC = () => {
 
     if (error) {
       alert("Fehler beim Speichern: " + error.message);
+      fetchGlobalData(true); // Rollback
       return;
     }
     
+    // Prüfe auf sofortiges Match
     if (swipeType === 'like' && partnerId) {
       const { data: partnerLikes } = await supabase
         .from('swipes')
@@ -177,14 +183,10 @@ const App: React.FC = () => {
         setCurrentMatch(dailyRecipe);
       }
     }
-  }, [userId, dailyRecipe, today, partnerId]);
+  }, [userId, dailyRecipe, today, partnerId, fetchGlobalData]);
 
   const handleSaveRecipe = async (recipeData: Omit<Recipe, 'id' | 'createdBy'>) => {
-    // Für Rezepte verwenden wir eine echte UUID, da der User diese nie manuell eintippen muss
-    const newId = typeof crypto.randomUUID === 'function' 
-      ? crypto.randomUUID() 
-      : Math.random().toString(36).substring(2) + Date.now().toString(36);
-
+    const newId = Math.random().toString(36).substring(2) + Date.now().toString(36);
     try {
       const { error } = await supabase.from('recipes').insert({
         id: newId, 
@@ -216,7 +218,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen max-w-md mx-auto bg-[#fdfcfb] flex flex-col relative overflow-hidden shadow-2xl border-x border-gray-100">
+    <div className="min-h-screen max-w-md mx-auto bg-[#fdfcfb] flex flex-col relative overflow-hidden shadow-2xl border-x border-gray-100 text-left">
       <header className="px-6 py-6 flex justify-between items-center bg-white/70 backdrop-blur-xl sticky top-0 z-30 border-b border-gray-50">
         <div onClick={() => setView('home')} className="cursor-pointer">
           <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
@@ -229,13 +231,17 @@ const App: React.FC = () => {
             </p>
           </div>
         </div>
-        <button 
-          onClick={() => setView('profile')} 
-          className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold border-2 border-white shadow-sm uppercase overflow-hidden"
-        >
+        <button onClick={() => setView('profile')} className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-bold border-2 border-white shadow-sm uppercase overflow-hidden">
           {userName ? userName[0] : <UserIcon size={18} />}
         </button>
       </header>
+
+      {dbError && (
+        <div className="mx-6 mt-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-start gap-3 text-rose-800 text-xs">
+          <AlertCircle className="flex-shrink-0 mt-0.5" size={16} />
+          <p className="leading-relaxed font-medium">{dbError}</p>
+        </div>
+      )}
 
       <main className="flex-grow px-6 pb-28 overflow-y-auto">
         <AnimatePresence mode="wait">
@@ -243,16 +249,10 @@ const App: React.FC = () => {
             <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pt-4">
               <div className="bg-white rounded-[2.5rem] p-8 shadow-xl shadow-orange-100/50 border border-orange-50 relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-6"><ChefHat className="text-orange-200" size={40} /></div>
-                <h2 className="text-xl font-bold text-gray-900 mb-2 text-left">Heute entscheiden</h2>
-                <p className="text-gray-500 text-sm mb-8 leading-relaxed italic text-left">Ein Rezept, eine Wahl. Seid ihr euch einig?</p>
-                
+                <h2 className="text-xl font-bold text-gray-900 mb-2">Heute entscheiden</h2>
+                <p className="text-gray-500 text-sm mb-8 leading-relaxed italic">Ein Rezept, eine Wahl. Seid ihr euch einig?</p>
                 {!hasSwipedToday ? (
-                  <button 
-                    onClick={() => setView('swipe')} 
-                    className="w-full bg-orange-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:bg-orange-700 transition-all active:scale-95"
-                  >
-                    Vorschlag ansehen
-                  </button>
+                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:bg-orange-700 transition-all active:scale-95">Vorschlag ansehen</button>
                 ) : (
                   <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
@@ -261,17 +261,11 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
-
               <div className="space-y-4">
                 <div className="flex justify-between items-center px-1">
-                  <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2">
-                    <Users size={18} className="text-orange-500" /> Community-Status
-                  </h3>
-                  <button onClick={() => fetchGlobalData()} className="text-gray-400 p-2 hover:text-orange-500 transition-colors">
-                    <RefreshCw size={18} />
-                  </button>
+                  <h3 className="font-bold text-gray-900 text-lg flex items-center gap-2"><Users size={18} className="text-orange-500" /> Community-Status</h3>
+                  <button onClick={() => fetchGlobalData()} className="text-gray-400 p-2 hover:text-orange-500 transition-colors"><RefreshCw size={18} /></button>
                 </div>
-                
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm text-center">
                     <p className="text-3xl font-black text-orange-600 leading-none">{allRecipes.length}</p>
@@ -316,17 +310,11 @@ const App: React.FC = () => {
                   <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                     <div className="flex justify-between items-center bg-white p-5 rounded-[2.5rem] border border-gray-100 shadow-sm">
                       <div>
-                        <h2 className="text-2xl font-bold text-gray-900 px-1 text-left">Bibliothek</h2>
-                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1 text-left">Alle globalen Rezepte</p>
+                        <h2 className="text-2xl font-bold text-gray-900 px-1">Bibliothek</h2>
+                        <p className="text-[10px] text-gray-400 uppercase font-bold tracking-widest px-1">Alle globalen Rezepte</p>
                       </div>
-                      <button 
-                        onClick={() => setIsAddingRecipe(true)} 
-                        className="bg-orange-600 text-white p-4 rounded-full shadow-lg hover:bg-orange-700 transition-all active:scale-90"
-                      >
-                        <Plus size={24} />
-                      </button>
+                      <button onClick={() => setIsAddingRecipe(true)} className="bg-orange-600 text-white p-4 rounded-full shadow-lg hover:bg-orange-700 transition-all active:scale-90"><Plus size={24} /></button>
                     </div>
-
                     <div className="space-y-4 pb-12">
                       {allRecipes.length === 0 && !isLoading && (
                         <div className="text-center py-20 bg-gray-50 rounded-[3rem] border-2 border-dashed border-gray-200">
@@ -339,7 +327,7 @@ const App: React.FC = () => {
                           <div className="w-24 h-24 rounded-2xl overflow-hidden flex-shrink-0 border border-gray-50 bg-gray-50">
                             <img src={r.imageUrl} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={r.title} />
                           </div>
-                          <div className="overflow-hidden flex flex-col justify-center pr-2 text-left">
+                          <div className="overflow-hidden flex flex-col justify-center pr-2">
                             <h4 className="font-bold text-gray-900 truncate">{r.title}</h4>
                             <p className="text-[11px] text-gray-400 line-clamp-2 mt-1 italic leading-relaxed">{r.recipeText}</p>
                           </div>
@@ -355,47 +343,29 @@ const App: React.FC = () => {
           {view === 'profile' && (
             <motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8 pt-4">
               <div className="bg-white rounded-[2.5rem] p-8 shadow-lg border border-gray-100">
-                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8 text-left">Setup</h2>
-                
+                <h2 className="text-2xl font-bold text-gray-900 mb-8 italic underline decoration-orange-200 decoration-4 underline-offset-8">Setup</h2>
                 <div className="space-y-6">
-                  <div className="group text-left">
+                  <div className="group">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">Dein Name</label>
-                    <input 
-                      value={userName} 
-                      onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} 
-                      className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none focus:ring-2 ring-orange-500/20 text-gray-900 font-bold" 
-                    />
+                    <input value={userName} onChange={e => {setUserName(e.target.value); localStorage.setItem('dm_user_name', e.target.value)}} className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none focus:ring-2 ring-orange-500/20 text-gray-900 font-bold" />
                   </div>
-
-                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative text-left">
+                  <div className="p-5 bg-orange-50 rounded-[2rem] border border-orange-100 relative">
                     <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-2">Deine ID (Für den Partner)</label>
                     <div className="flex justify-between items-center">
                       <span className="font-mono font-black text-lg text-orange-900 tracking-tighter italic">{userId}</span>
-                      <button 
-                        onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} 
-                        className="p-3 bg-white rounded-xl shadow-sm hover:scale-110 transition-transform text-orange-600"
-                      >
+                      <button onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="p-3 bg-white rounded-xl shadow-sm hover:scale-110 transition-transform text-orange-600">
                         {copied ? <Check size={20} className="text-emerald-500" /> : <Copy size={20} />}
                       </button>
                     </div>
                   </div>
-
-                  <div className="group text-left">
+                  <div className="group">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-2 group-focus-within:text-orange-500 transition-colors">ID deines Partners</label>
-                    <input 
-                      value={partnerId} 
-                      onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} 
-                      className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 focus:ring-2 ring-orange-500/20 placeholder:text-gray-300" 
-                      placeholder="XXXXXX" 
-                    />
+                    <input value={partnerId} onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} className="w-full bg-gray-50 p-5 rounded-2xl border-none outline-none font-mono text-lg font-bold text-gray-900 focus:ring-2 ring-orange-500/20 placeholder:text-gray-300" placeholder="XXXXXX" />
                     <p className="text-[9px] text-gray-400 mt-2 italic px-1">Wichtig: Trage hier die ID deines Partners ein, damit ihr Matches bekommt!</p>
                   </div>
-                  
-                  <div className="pt-6 border-t border-gray-100 text-left">
+                  <div className="pt-6 border-t border-gray-100">
                     <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic">
-                        Alle Rezepte sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek für alle User.
-                      </p>
+                      <p className="text-[11px] text-emerald-800 font-medium leading-relaxed italic">Alle Rezepte sind global sichtbar. Sobald jemand ein neues Rezept hochlädt, landet es automatisch in der Bibliothek.</p>
                     </div>
                   </div>
                 </div>
@@ -414,12 +384,7 @@ const App: React.FC = () => {
 
       <AnimatePresence>
         {currentMatch && (
-          <MatchCelebration 
-            recipe={currentMatch} 
-            user={{id: userId, name: userName, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`} as any} 
-            partner={{name: "Dein Partner", avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId}`} as any} 
-            onClose={() => setCurrentMatch(null)} 
-          />
+          <MatchCelebration recipe={currentMatch} user={{id: userId, name: userName, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`} as any} partner={{name: "Dein Partner", avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${partnerId}`} as any} onClose={() => setCurrentMatch(null)} />
         )}
       </AnimatePresence>
     </div>
