@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { Recipe, Swipe, Match } from './types';
+import { Recipe, Swipe, Match, SwipeType } from './types';
 import { supabase, isSupabaseConnected } from './lib/supabase';
 import { INITIAL_RECIPES } from './lib/mockData';
 import SwipeCard from './components/SwipeCard';
@@ -79,7 +79,16 @@ const App: React.FC = () => {
 
         if (userId) {
           const { data: swipesData } = await supabase.from('swipes').select('*').eq('day', today).eq('user_id', userId);
-          if (swipesData) setSwipes(swipesData);
+          if (swipesData) {
+            const mappedSwipes: Swipe[] = swipesData.map(s => ({
+              id: s.id,
+              userId: s.user_id,
+              recipeId: s.recipe_id,
+              type: s.type as SwipeType,
+              date: s.day
+            }));
+            setSwipes(mappedSwipes);
+          }
         }
       } catch (err) {
         console.warn("Cloud-Sync fehlgeschlagen.");
@@ -95,22 +104,25 @@ const App: React.FC = () => {
         .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
           const newSwipe = payload.new;
           if (newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
-            const hasLiked = swipes.some(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
-            if (hasLiked) {
-              const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
-              if (matchedRecipe) setCurrentMatch(matchedRecipe);
-            }
+            // Check if user already liked this
+            setSwipes(current => {
+              const hasLiked = current.some(s => s.recipeId === newSwipe.recipe_id && s.type === 'like');
+              if (hasLiked) {
+                const matchedRecipe = allRecipes.find(r => r.id === newSwipe.recipe_id);
+                if (matchedRecipe) setCurrentMatch(matchedRecipe);
+              }
+              return current;
+            });
           }
         }).subscribe();
       return () => { supabase.removeChannel(channel); };
     }
-  }, [userId, partnerId, today, isSupabaseConnected]);
+  }, [userId, partnerId, today, isSupabaseConnected, allRecipes]);
 
-  const hasSwipedToday = useMemo(() => swipes.some(s => (s as any).user_id === userId), [swipes, userId]);
+  const hasSwipedToday = useMemo(() => swipes.some(s => s.userId === userId), [swipes, userId]);
   
   const dailyRecipe = useMemo(() => {
     if (allRecipes.length === 0) return null;
-    // Verwende das Datum als Seed für die Auswahl, damit beide User am selben Tag das gleiche sehen
     const daySeed = new Date().getFullYear() * 1000 + new Date().getMonth() * 100 + new Date().getDate();
     const dayIndex = daySeed % allRecipes.length;
     return allRecipes[dayIndex];
@@ -118,18 +130,25 @@ const App: React.FC = () => {
 
   const handleSwipe = useCallback(async (direction: 'left' | 'right') => {
     if (!dailyRecipe || !userId) return;
-    const type = direction === 'right' ? 'like' : 'dislike';
+    const swipeType: SwipeType = direction === 'right' ? 'like' : 'dislike';
     
-    const newSwipe = { id: 'local-' + Date.now(), userId, recipeId: dailyRecipe.id, type, date: today };
+    const newSwipe: Swipe = { 
+      id: 'local-' + Date.now(), 
+      userId, 
+      recipeId: dailyRecipe.id, 
+      type: swipeType, 
+      date: today 
+    };
+    
     setSwipes(prev => [...prev, newSwipe]);
     
     if (isSupabaseConnected) {
       try {
-        await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type, day: today });
-      } catch (e) { console.warn("Swipe nur lokal."); }
+        await supabase.from('swipes').insert({ user_id: userId, recipe_id: dailyRecipe.id, type: swipeType, day: today });
+      } catch (e) { console.warn("Swipe nur lokal gespeichert."); }
     } else {
-      // Mock Match Logik für lokalen Modus (nur zum Testen auf einem Gerät)
-      if (type === 'like' && partnerId === userId) {
+      // Mock Match Logik für lokalen Modus (wenn PartnerID = eigene ID zum Testen)
+      if (swipeType === 'like' && partnerId === userId) {
         setCurrentMatch(dailyRecipe);
       }
     }
@@ -215,7 +234,7 @@ const App: React.FC = () => {
                 <h2 className="text-xl font-bold text-gray-900 mb-2">Heute entscheiden</h2>
                 <p className="text-gray-500 text-sm mb-8 leading-relaxed">Was essen wir heute Abend?</p>
                 {!hasSwipedToday ? (
-                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-orange-700">Vorschlag ansehen</button>
+                  <button onClick={() => setView('swipe')} className="w-full bg-orange-600 text-white font-bold py-4 rounded-2xl shadow-lg hover:bg-orange-700 transition-colors">Vorschlag ansehen</button>
                 ) : (
                   <div className="flex flex-col items-center py-6 bg-emerald-50 rounded-[2rem] border border-emerald-100">
                     <CheckCircle2 className="text-emerald-500 mb-2" size={32} />
@@ -243,7 +262,15 @@ const App: React.FC = () => {
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-4">
-                    {/* Liste der Matches... */}
+                    {matches.map((match, idx) => {
+                      const recipe = allRecipes.find(r => r.id === match.recipeId);
+                      return (
+                        <div key={idx} className="bg-white p-3 rounded-2xl shadow-sm border border-gray-100">
+                          <img src={recipe?.imageUrl} className="w-full h-24 object-cover rounded-xl mb-2" alt={recipe?.title} />
+                          <p className="font-bold text-xs text-gray-800 truncate">{recipe?.title}</p>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -279,15 +306,15 @@ const App: React.FC = () => {
                   <motion.div key="list" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                     <div className="flex justify-between items-center bg-white p-4 rounded-[2rem] border border-gray-100">
                       <h2 className="text-2xl font-bold text-gray-900 px-2">Bibliothek</h2>
-                      <button onClick={() => setIsAddingRecipe(true)} className="bg-orange-600 text-white p-3 rounded-full shadow-lg">
+                      <button onClick={() => setIsAddingRecipe(true)} className="bg-orange-600 text-white p-3 rounded-full shadow-lg hover:bg-orange-700 transition-colors">
                         <Plus size={24} />
                       </button>
                     </div>
 
                     <div className="space-y-4 pb-10">
                       {allRecipes.map(r => (
-                        <div key={r.id} className="flex gap-4 p-4 bg-white rounded-3xl border border-gray-100 shadow-sm">
-                          <img src={r.imageUrl} className="w-20 h-20 rounded-2xl object-cover flex-shrink-0" />
+                        <div key={r.id} className="flex gap-4 p-4 bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow group">
+                          <img src={r.imageUrl} className="w-20 h-20 rounded-2xl object-cover flex-shrink-0" alt={r.title} />
                           <div className="overflow-hidden">
                             <h4 className="font-bold text-gray-900 truncate">{r.title}</h4>
                             <p className="text-xs text-gray-500 line-clamp-2 mt-1 italic">{r.recipeText}</p>
@@ -316,8 +343,8 @@ const App: React.FC = () => {
                     <label className="text-[10px] font-black text-orange-400 uppercase tracking-widest block mb-1">Deine User-ID</label>
                     <div className="flex justify-between items-center">
                       <span className="font-mono font-bold text-orange-900">{userId}</span>
-                      <button onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="text-orange-600">
-                        {copied ? <Check size={18} /> : <Copy size={18} />}
+                      <button onClick={() => {navigator.clipboard.writeText(userId); setCopied(true); setTimeout(()=>setCopied(false),2000)}} className="text-orange-600 hover:scale-110 transition-transform">
+                        {copied ? <Check size={18} className="text-emerald-500" /> : <Copy size={18} />}
                       </button>
                     </div>
                   </div>
@@ -327,7 +354,7 @@ const App: React.FC = () => {
                     <input 
                       value={partnerId} 
                       onChange={e => {setPartnerId(e.target.value); localStorage.setItem('dm_partner_id', e.target.value)}} 
-                      className="w-full bg-gray-50 p-4 rounded-2xl border-none outline-none font-mono text-sm" 
+                      className="w-full bg-gray-50 p-4 rounded-2xl border-none outline-none font-mono text-sm focus:ring-2 ring-orange-500/20" 
                       placeholder="ID deines Partners" 
                     />
                   </div>
@@ -336,9 +363,9 @@ const App: React.FC = () => {
 
                   <div className="space-y-4">
                     <h3 className="font-bold text-gray-900 text-sm">Rezepte übertragen</h3>
-                    <p className="text-xs text-gray-400">Falls der Cloud-Sync nicht aktiv ist, könnt ihr eure Rezepte manuell teilen.</p>
+                    <p className="text-xs text-gray-400 italic">Falls der Cloud-Sync nicht aktiv ist, könnt ihr eure Rezepte manuell teilen.</p>
                     
-                    <button onClick={exportRecipes} className="w-full flex items-center justify-center gap-2 bg-gray-900 text-white py-4 rounded-2xl font-bold text-sm">
+                    <button onClick={exportRecipes} className="w-full flex items-center justify-center gap-2 bg-gray-900 text-white py-4 rounded-2xl font-bold text-sm hover:bg-gray-800 transition-colors">
                       <Share2 size={18} /> Bibliothek exportieren
                     </button>
 
@@ -347,9 +374,9 @@ const App: React.FC = () => {
                         value={syncCode} 
                         onChange={e => setSyncCode(e.target.value)}
                         placeholder="Sync-Code hier einfügen..."
-                        className="w-full bg-gray-50 p-4 rounded-2xl text-[10px] h-20 font-mono"
+                        className="w-full bg-gray-50 p-4 rounded-2xl text-[10px] h-20 font-mono resize-none"
                       />
-                      <button onClick={importRecipes} className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-4 rounded-2xl font-bold text-sm">
+                      <button onClick={importRecipes} className="w-full flex items-center justify-center gap-2 bg-orange-600 text-white py-4 rounded-2xl font-bold text-sm hover:bg-orange-700 transition-colors">
                         <Download size={18} /> Code importieren
                       </button>
                     </div>
