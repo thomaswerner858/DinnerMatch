@@ -47,7 +47,7 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
       drag="x"
       dragConstraints={{ left: 0, right: 0 }}
       onDragEnd={handleDragEnd}
-      whileGrab={{ scale: 1.05 }}
+      whileTap={{ scale: 1.05 }}
       className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden cursor-grab active:cursor-grabbing border border-gray-100 flex flex-col"
     >
       <div className="relative h-3/4 w-full overflow-hidden">

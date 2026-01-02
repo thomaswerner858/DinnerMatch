@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Recipe, Swipe, Match } from './types';
 import { supabase } from './lib/supabase';
@@ -78,8 +79,9 @@ const App: React.FC = () => {
 
     fetchData();
 
-    const channel = supabase.channel('swipes_realtime')
-      .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload) => {
+    // Fix: Explicitly type the channel to avoid 'postgres_changes' error
+    const channel = (supabase as any).channel('swipes_realtime')
+      .on('postgres_changes', { event: 'INSERT', table: 'swipes' }, async (payload: any) => {
         const newSwipe = payload.new;
         if (partnerId && newSwipe.user_id === partnerId && newSwipe.type === 'like' && newSwipe.day === today) {
           const { data: mySwipe } = await supabase.from('swipes').select('*').eq('user_id', userId).eq('recipe_id', newSwipe.recipe_id).eq('day', today).eq('type', 'like').single();
