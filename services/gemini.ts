@@ -1,9 +1,23 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Sicherer Check für den API Key
+const getApiKey = () => {
+  try {
+    return process.env.API_KEY || "";
+  } catch (e) {
+    return "";
+  }
+};
 
 export async function generateRecipeSuggestion(lastMatches: string[]) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.warn("Kein Gemini API Key gefunden.");
+    return null;
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `Basierend auf diesen letzten Gerichten: ${lastMatches.join(", ")}, schlage ein neues, kreatives Rezept für ein Abendessen vor. Gib den Namen, eine kurze Beschreibung, 5 Hauptzutaten und einen Bild-Prompt aus. Antworte auf Deutsch.`;
 
   try {
