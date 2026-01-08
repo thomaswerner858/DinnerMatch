@@ -2,7 +2,6 @@
 import React from 'react';
 import { motion, PanInfo, useMotionValue, useTransform } from 'framer-motion';
 import { Recipe } from '../types';
-import { Heart, X, Info } from 'lucide-react';
 
 interface SwipeCardProps {
   recipe: Recipe;
@@ -27,16 +26,12 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
 
   if (!isTop) {
     return (
-      <div className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-100">
+      <div className="absolute inset-0 w-full h-full bg-white rounded-[2.5rem] shadow-xl overflow-hidden border border-gray-100">
         <img 
           src={recipe.imageUrl} 
           alt={recipe.title} 
-          className="w-full h-3/4 object-cover grayscale-[0.5] opacity-50" 
+          className="w-full h-full object-cover grayscale-[0.5] opacity-30" 
         />
-        <div className="p-6 bg-white">
-          <h3 className="text-2xl font-bold text-gray-800">{recipe.title}</h3>
-          <p className="text-gray-500 mt-2 line-clamp-2">{recipe.recipeText}</p>
-        </div>
       </div>
     );
   }
@@ -47,42 +42,39 @@ const SwipeCard: React.FC<SwipeCardProps> = ({ recipe, onSwipe, isTop }) => {
       drag="x"
       dragConstraints={{ left: 0, right: 0 }}
       onDragEnd={handleDragEnd}
-      whileTap={{ scale: 1.05 }}
-      className="absolute inset-0 w-full h-full bg-white rounded-3xl shadow-2xl overflow-hidden cursor-grab active:cursor-grabbing border border-gray-100 flex flex-col"
+      whileTap={{ scale: 1.02 }}
+      className="absolute inset-0 w-full h-full bg-white rounded-[2.5rem] shadow-2xl overflow-hidden cursor-grab active:cursor-grabbing border border-gray-100"
     >
-      <div className="relative h-2/3 w-full overflow-hidden">
+      <div className="relative h-full w-full">
         <img 
           src={recipe.imageUrl} 
           alt={recipe.title} 
           className="w-full h-full object-cover pointer-events-none" 
         />
         
-        {/* Indicators */}
+        {/* Gradient Overlay for Title */}
+        <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/80 via-black/40 to-transparent pointer-events-none" />
+        
+        <div className="absolute bottom-8 left-8 right-8 pointer-events-none">
+          <h3 className="text-3xl font-black text-white leading-tight drop-shadow-lg italic">
+            {recipe.title}
+          </h3>
+        </div>
+
+        {/* Swipe Indicators */}
         <motion.div 
           style={{ opacity: likeOpacity }}
-          className="absolute top-10 left-10 border-4 border-emerald-500 rounded-lg px-4 py-2 rotate-[-15deg]"
+          className="absolute top-12 left-10 border-4 border-emerald-500 rounded-2xl px-6 py-3 rotate-[-15deg] bg-emerald-500/10 backdrop-blur-sm"
         >
-          <span className="text-emerald-500 text-4xl font-black uppercase">Lecker</span>
+          <span className="text-emerald-500 text-4xl font-black uppercase tracking-tighter">Lecker</span>
         </motion.div>
 
         <motion.div 
           style={{ opacity: dislikeOpacity }}
-          className="absolute top-10 right-10 border-4 border-rose-500 rounded-lg px-4 py-2 rotate-[15deg]"
+          className="absolute top-12 right-10 border-4 border-rose-500 rounded-2xl px-6 py-3 rotate-[15deg] bg-rose-500/10 backdrop-blur-sm"
         >
-          <span className="text-rose-500 text-4xl font-black uppercase">Näh</span>
+          <span className="text-rose-500 text-4xl font-black uppercase tracking-tighter">Näh</span>
         </motion.div>
-      </div>
-
-      <div className="p-6 flex-grow flex flex-col justify-start overflow-hidden">
-        <div className="flex justify-between items-start mb-2">
-          <h3 className="text-2xl font-bold text-gray-900 leading-tight">{recipe.title}</h3>
-          <button className="text-gray-400 hover:text-gray-600 transition-colors">
-            <Info size={20} />
-          </button>
-        </div>
-        <p className="text-gray-600 text-sm md:text-base leading-relaxed overflow-y-auto pr-2 custom-scrollbar">
-          {recipe.recipeText}
-        </p>
       </div>
     </motion.div>
   );
